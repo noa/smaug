@@ -1,0 +1,33 @@
+contract:
+  award_id: X100001
+  pi: Jane Smith
+  start_date: 2025-01-01
+  periods:
+    year1:
+      start: 2025-01-01
+      end: 2025-12-31
+    year2:
+      start: 2026-01-01
+      end: 2026-12-31
+    year3:
+      start: 2027-01-01
+      end: 2028-06-30
+
+totals:
+  total_budget: 1500000
+  total_direct_costs: 967742
+  total_indirect_costs: 532258
+
+by_year:
+  year1:
+    total: 450000
+    direct: 290323
+    idc: 159677
+  year2:
+    total: 500000
+    direct: 322581
+    idc: 177419
+  year3:
+    total: 550000
+    direct: 354839
+    idc: 195161

@@ -1,0 +1,12 @@
+items:
+  - project: QUASAR
+    description: GPU Server (A100)
+    amount: 15000.00
+    category: Equipment
+    date: 2025-06-15
+  - project: QUASAR
+    description: AWS Cloud Compute
+    amount: 500.00
+    category: Compute
+    start: 2025-06-01
+    end: 2027-06-01

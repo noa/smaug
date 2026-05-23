@@ -1,0 +1,120 @@
+[project]
+name = "smaug"
+version = "0.1.0"
+description = "Budget tracking and spending projections for academic research grants"
+readme = "README.md"
+license = {text = "AGPL-3.0-only"}
+requires-python = ">=3.11"
+authors = [{name = "Nicholas Andrews"}]
+keywords = ["academic", "budget", "grants", "research", "finance", "projections"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Office/Business :: Financial",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "pdfplumber>=0.10",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "ruamel.yaml>=0.17",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "pre-commit>=4.0",
+    "ruff>=0.11",
+    "mypy>=1.15",
+    "types-PyYAML",
+    "types-openpyxl",
+    "pandas-stubs",
+]
+mcp = [
+    "mcp[cli]>=1.0",
+]
+
+[project.scripts]
+smaug = "smaug.cli:main"
+smaug-mcp = "smaug.mcp_server:main"
+
+[project.entry-points."smaug.parsers"]
+jhu_sponsored = "smaug.parsers.jhu_sponsored:JHUSponsoredParser"
+jhu_non_sponsored = "smaug.parsers.jhu_sponsored:JHUNonSponsoredParser"
+jhu_invoice = "smaug.parsers.jhu_invoice:JHUInvoiceParser"
+csv = "smaug.parsers.csv_parser:CSVReportParser"
+
+[project.urls]
+Homepage = "https://github.com/noa/smaug"
+Issues = "https://github.com/noa/smaug/issues"
+Documentation = "https://github.com/noa/smaug/tree/main/docs"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smaug"]
+
+# ── Ruff ────────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+    "S",    # flake8-bandit (security)
+    "T20",  # flake8-print (flag print statements)
+    "PT",   # flake8-pytest-style
+]
+ignore = [
+    "S101",   # allow assert in tests
+    "T201",   # allow print() in CLI tool
+    "E501",   # line length handled by formatter
+    "S603",   # subprocess calls are intentional (git integration)
+    "S607",   # partial executable paths are intentional (git)
+    "S110",   # try-except-pass used for best-effort operations
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S311"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ── Mypy ────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false       # gradual typing — tighten over time
+check_untyped_defs = true
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = [
+    "pdfplumber.*",
+    "rich.*",
+    "mcp.*",
+]
+ignore_missing_imports = true

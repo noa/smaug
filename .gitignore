@@ -1,0 +1,46 @@
+# ----- Smaug-specific -----
+# User data directory (contains institutional configs, reports, budgets)
+data/
+.anonymizer_mapping.yaml
+*.bak
+
+# Generated output
+sponsored_costs_summary.csv
+
+# Report files (may contain sensitive financial data)
+*.pdf
+*.xlsx
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# ----- Virtual environments -----
+.venv/
+venv/
+ENV/
+
+# ----- IDE -----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.ropeproject/
+
+# ----- Testing -----
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ----- OS -----
+.DS_Store
+Thumbs.db

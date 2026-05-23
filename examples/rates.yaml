@@ -1,0 +1,28 @@
+# Institutional rates — example configuration
+# Customize these values for your institution
+
+idc_rate: 0.55          # Indirect Cost (F&A) rate
+
+fringe_rates:
+  faculty: 0.315
+  staff: 0.315
+  postdoc: 0.211
+  grad_student: 0.0
+  part_time: 0.0825
+
+grad_student_costs:
+  stipend: 50000          # Annual PhD stipend
+  phd_tuition: 13334      # Annual tuition charged to grant (after institutional remission)
+  masters_tuition: 66670  # Full tuition for Masters students
+  full_tuition: 66670     # Reference: full annual tuition rate
+  health_dental: 4365     # Annual health & dental insurance per student
+
+tuition_billing:
+  schedule: semester
+  months: [1, 9]          # Months when tuition is billed (January, September)
+  per_semester: 6667      # PhD tuition per semester
+  masters_per_semester: 33335
+
+undergrad_hourly: 15.0
+masters_hourly: 20.0
+masters_hours_per_week: 20

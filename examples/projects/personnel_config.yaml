@@ -1,0 +1,61 @@
+# Personnel configuration — defines lab members and their project assignments
+# Effort is expressed as a decimal (0.25 = 25%)
+# Dates use YYYY-MM format
+
+personnel:
+  - name: "Smith, Jane"
+    type: faculty
+    annual_salary: 180000
+    assignments:
+      - project: QUASAR
+        effort: 0.10
+        start: 2025-01
+      - project: NEXUS
+        effort: 0.10
+        start: 2025-01
+      - project: ATLAS
+        effort: 0.10
+        start: 2026-09
+
+  - name: "Chen, Wei"
+    type: postdoc
+    annual_salary: 72000
+    assignments:
+      - project: QUASAR
+        effort: 1.0
+        start: 2025-06
+
+  - name: "Garcia, Maria"
+    type: grad_student
+    annual_salary: 50000
+    assignments:
+      - project: QUASAR
+        effort: 0.50
+        start: 2025-09
+      - project: NEXUS
+        effort: 0.50
+        start: 2025-09
+
+  - name: "Patel, Raj"
+    type: grad_student
+    annual_salary: 50000
+    assignments:
+      - project: NEXUS
+        effort: 1.0
+        start: 2025-09
+
+  - name: "Johnson, Alex"
+    type: staff
+    annual_salary: 65000
+    assignments:
+      - project: QUASAR
+        effort: 0.50
+        start: 2025-03
+
+  - name: "Lee, Sophie"
+    type: grad_student
+    annual_salary: 50000
+    assignments:
+      - project: ATLAS
+        effort: 1.0
+        start: 2026-09

@@ -1,0 +1,38 @@
+{
+    "grant_number": "200001",
+    "period": "September 2025",
+    "total_spent": "1172898.22",
+    "total_committed": "342270.13",
+    "total_spent_and_committed": "1515168.35",
+    "budget_utilized_pct": "119.2",
+    "personnel": [
+        {
+            "name": "Smith, Jane",
+            "salary": "1404.28"
+        },
+        {
+            "name": "Chen, Wei",
+            "salary": "7500.00"
+        },
+        {
+            "name": "Kim, David",
+            "salary": "3888.50"
+        },
+        {
+            "name": "Garcia, Maria",
+            "salary": "4218.74"
+        },
+        {
+            "name": "Park, Henry",
+            "salary": "4027.79"
+        },
+        {
+            "name": "Johnson, Alex",
+            "salary": "1010.24"
+        },
+        {
+            "name": "Novak, Lin",
+            "salary": "6666.66"
+        }
+    ]
+}

@@ -1,0 +1,19 @@
+travel:
+  - project: QUASAR
+    description: NeurIPS 2025
+    date: 2025-12-10
+    amount: 3200.00
+    traveler: "Chen, Wei"
+    status: actualized
+  - project: QUASAR
+    description: ICML 2026
+    date: 2026-07-20
+    amount: 3500.00
+    traveler: "Garcia, Maria"
+    status: estimated
+  - project: NEXUS
+    description: ACL 2026
+    date: 2026-08-10
+    amount: 2800.00
+    traveler: "Patel, Raj"
+    status: estimated

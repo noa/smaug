@@ -1,0 +1,40 @@
+# Project manifest — defines all projects tracked by smaug
+# Sponsored projects are grant-funded; discretionary are internal accounts
+# Status: proposed → accepted → active → completed
+
+projects:
+  QUASAR:
+    name: Quantum-Assisted Sensing and Recognition
+    status: active
+    grant_number: '200001'
+    sponsored_program: '90200001'
+    award_id: X100001
+    budget_dir: examples/projects/QUASAR
+    pi: Jane Smith
+    end_date: 2028-06
+    total_budget: 1500000
+
+  NEXUS:
+    name: Neural Exchange for Unified Systems
+    status: active
+    grant_number: '200002'
+    sponsored_program: '90200002'
+    award_id: X100002
+    pi: Jane Smith
+    end_date: 2027-03
+    total_budget: 750000
+
+  ATLAS:
+    name: Adaptive Transfer Learning for Autonomous Systems
+    status: proposed
+    pi: Jane Smith
+    total_budget: 500000
+
+discretionary:
+  STARTUP:
+    name: PI Startup Funds
+    funded_program: '80010001'
+    fund_center: '2110000200'
+    reports_dir: examples/reports/non-sponsored
+    pi: Jane Smith
+    type: discretionary
