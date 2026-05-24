@@ -151,7 +151,7 @@ personnel:
         effort: 0.10
         start: 2025-01
 
-  - name: "Garcia, Maria"
+  - name: "Martinez, Sofia"
     type: grad_student
     annual_salary: 50000
     assignments:
@@ -193,7 +193,7 @@ travel:
     description: ICML 2026
     date: 2026-07-20
     amount: 3500.00
-    traveler: "Garcia, Maria"
+    traveler: "Martinez, Sofia"
     status: estimated
 ```
 
@@ -290,7 +290,7 @@ See [Personnel Aliases](aliases_and_identity.md) for full documentation.
 aliases:
   jane: "Smith, Jane"
   wei: "Chen, Wei"
-  maria: "Garcia, Maria"
+  sofia: "Martinez, Sofia"
 ```
 
 ---

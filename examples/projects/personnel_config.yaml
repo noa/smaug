@@ -25,7 +25,7 @@ personnel:
         effort: 1.0
         start: 2025-06
 
-  - name: "Garcia, Maria"
+  - name: "Martinez, Sofia"
     type: grad_student
     annual_salary: 50000
     assignments:

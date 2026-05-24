@@ -43,7 +43,7 @@ Alias                Resolves To
 ------------------------------------------------------------
 jane                 Smith, Jane
 wei                  Chen, Wei
-maria                Garcia, Maria
+sofia                Martinez, Sofia
 ```
 
 ### Add an alias
@@ -52,7 +52,7 @@ maria                Garcia, Maria
 smaug alias add wei "Chen, Wei"
 
 # The target name supports fuzzy matching too:
-smaug alias add maria garcia     # Resolves "garcia" → "Garcia, Maria"
+smaug alias add sofia martinez     # Resolves "martinez" → "Martinez, Sofia"
 ```
 
 If the alias already exists, it is updated:
@@ -108,7 +108,7 @@ $ smaug personnel
   # Name                   Salary  Current Effort     Spent       Ends ...
   1 Smith, Jane              $180k            30%    $12,000   ongoing ...
   2 Chen, Wei                 $72k           100%    $45,000   ongoing ...
-  3 Garcia, Maria             $50k           100%    $18,000   ongoing ...
+  3 Martinez, Sofia             $50k           100%    $18,000   ongoing ...
 
 # Use the index directly:
 $ smaug set-effort 2 QUASAR 50%
@@ -124,12 +124,12 @@ Fuzzy matching is a **case-insensitive substring search**:
 
 - `smith` matches `"Smith, Jane"` ✓
 - `jan` matches `"Smith, Jane"` ✓
-- `garcia` matches `"Garcia, Maria"` ✓
+- `martinez` matches `"Martinez, Sofia"` ✓
 - `a` matches multiple people → smaug reports the ambiguity:
 
 ```
 Multiple personnel matching 'a':
-  - Garcia, Maria
+  - Martinez, Sofia
   - Patel, Raj
   - Johnson, Alex
 ```

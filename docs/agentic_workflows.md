@@ -2,7 +2,7 @@
 
 This guide shows how AI agents can use Smaug to answer complex research administration questions that require multi-step reasoning. Each example demonstrates an **observe → reason → decide → act** loop where the agent queries data, interprets intermediate results, and adapts its plan based on what it finds.
 
-Agents can interact with Smaug via the **CLI** (shell-based agents read [`AGENTS.md`](../AGENTS.md)), the **Python API** (`smaug.api.SmaugAPI`, returns plain dicts), or the **MCP server** (`smaug-mcp`).
+Agents can interact with Smaug via the **CLI** (shell-based agents read [`AGENTS.md`](../AGENTS.md)), the **Python API** (`smaug.api.SmaugAPI`, returns plain dicts), or the **MCP server** (`smaug-mcp`). For detailed setup and agent-specific configurations, please refer to the [Agent Getting Started Guides](agents/overview.md).
 
 ---
 
@@ -53,7 +53,7 @@ Agent: Confirmed — September projection jumps to $58k because of the tuition
 
 > smaug personnel --project QUASAR
 
-Agent: PI Smith already supervises Chen (postdoc) and Garcia (PhD, 50%).
+Agent: PI Smith already supervises Chen (postdoc) and Martinez (PhD, 50%).
        Adding 2 more students plus a new postdoc brings the lab to 5 direct
        reports. That's a judgment call for the PI.
 
@@ -133,27 +133,27 @@ Agent: NEXUS burns ~$12,745/month. At this rate, funds run out around
 
 Agent: NEXUS personnel:
        - Smith, Jane (PI) — 10% effort
-       - Garcia, Maria (PhD) — 50% effort
+       - Martinez, Sofia (PhD) — 50% effort
        - Patel, Raj (PhD) — 100% effort
 
-       Can't touch the PI. Let me check if Garcia or Patel have room
+       Can't touch the PI. Let me check if Martinez or Patel have room
        on other accounts.
 
-> smaug personnel "Garcia"
+> smaug personnel "Martinez"
 
-Agent: Garcia is 50% QUASAR, 50% NEXUS — total 100%. She can't take on
+Agent: Martinez is 50% QUASAR, 50% NEXUS — total 100%. She can't take on
        more work, but I could shift her NEXUS portion to QUASAR.
 
-       What would removing Garcia do to NEXUS?
+       What would removing Martinez do to NEXUS?
 
-> smaug spend-plan NEXUS --if "Garcia=0%" --compare
+> smaug spend-plan NEXUS --if "Martinez=0%" --compare
 
 Agent: Monthly burn drops from $12,745 to $9,105. That extends the stop-
        work date from March 2027 to August 2027 — past the grant end.
 
        But can QUASAR absorb the cost?
 
-> smaug spend-plan QUASAR --if "Garcia=100%" --compare
+> smaug spend-plan QUASAR --if "Martinez=100%" --compare
 
 Agent: QUASAR projected total goes from $613k to $681k. With $1.37M
        remaining on a $1.5M budget, that's negligible. QUASAR is fine.
@@ -162,31 +162,31 @@ Agent: QUASAR projected total goes from $613k to $681k. With $1.37M
 
 > smaug note list NEXUS
 
-Agent: There's a note titled "Garcia Thesis Chapter 2" — Garcia is writing
+Agent: There's a note titled "Martinez Thesis Chapter 2" — Martinez is writing
        her second thesis chapter using NEXUS data, expected to finish by
        December 2026.
 
-       Revised plan: keep Garcia on NEXUS at 50% through December 2026
+       Revised plan: keep Martinez on NEXUS at 50% through December 2026
        to finish the chapter, then shift to 100% QUASAR in January 2027.
        That still saves ~$19k over the final 6 months.
 
-> smaug spend-plan NEXUS --if "Garcia=0%" --compare
+> smaug spend-plan NEXUS --if "Martinez=0%" --compare
 
 Agent: Even with the delayed shift, the savings from January–June 2027
        are enough to extend past the grant end date.
 
        Recommendation:
-       - Set Garcia's NEXUS end date to December 2026
-       - Increase Garcia's QUASAR effort to 100% starting January 2027
+       - Set Martinez's NEXUS end date to December 2026
+       - Increase Martinez's QUASAR effort to 100% starting January 2027
        - Total effort stays at 100% throughout — no over-commitment
-       - Garcia finishes her thesis chapter before the transition
+       - Martinez finishes her thesis chapter before the transition
 ```
 
-**What makes this agentic:** The agent identifies candidates, simulates the change on *both* the source and destination accounts, checks that neither budget breaks, reads project notes to discover a thesis-related constraint it wasn't told about, and revises its plan to accommodate a timeline the PI didn't mention. The final recommendation is time-phased rather than immediate, reflecting context the optimizer alone would miss.
+**What makes this agentic:** The agent identifies candidates, simulates the change on both the source and destination accounts, checks that neither budget breaks, reads project notes to discover a thesis-related constraint it wasn't told about, and revises its plan to accommodate a timeline the PI didn't mention. The final recommendation is time-phased rather than immediate, reflecting context the optimizer alone would miss.
 
 ### Commands (if PI approves)
 
 ```bash
-smaug set-end "Garcia" NEXUS 2026-12
-smaug set-effort "Garcia" QUASAR 100%
+smaug set-end "Martinez" NEXUS 2026-12
+smaug set-effort "Martinez" QUASAR 100%
 ```

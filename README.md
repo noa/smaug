@@ -4,6 +4,13 @@
 
 Smaug helps PIs and lab managers track grant spending, project burn rates, manage personnel effort allocations, and forecast stop-work dates — all from the command line.
 
+> [!IMPORTANT]
+> **Privacy & Separation of Concerns:**
+> Smaug is designed with a strict separation between code and sensitive data. All grant budgets, personnel salaries, and financial transaction histories reside strictly on your local machine and are **never** stored or tracked inside the package codebase.
+>
+> * **Default Data Location:** By default, your workspace state is stored in `~/.smaug/` in your user home directory.
+> * **Customizing the Location:** You can override this default by setting the `SMAUG_DATA_DIR` environment variable, or by passing the `--data-dir /path/to/dir` option to any CLI command.
+
 ---
 
 ## Core Capabilities
@@ -46,7 +53,7 @@ smaug spend-plan QUASAR --if "+phd@100%" --if "Smith, Jane=50%" --compare
 ╭─────────────────────────────────────────────────────────── Spend Plan: QUASAR ───────────────────────────────────────────────────────────╮
 │  Hypothetical: +phd@100%, Smith, Jane=50%                                                                                                │
 │  Through June 2028                                                                                                                       │
-│  Personnel: Faculty Smith, Jane 50%, Postdoc Chen, Wei 100%, PhD Garcia, Maria 50%, Staff Johnson, Alex 50%, PhD [Hypothetical           │
+│  Personnel: Faculty Smith, Jane 50%, Postdoc Chen, Wei 100%, PhD Martinez, Sofia 50%, Staff Johnson, Alex 50%, PhD [Hypothetical           │
 │  Grad_Student #1] 100%                                                                                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─────────────────────────────────────────────────────────────── Comparison ───────────────────────────────────────────────────────────────╮
@@ -129,6 +136,16 @@ uv pip install smaug
 # or
 pip install smaug
 ```
+
+> [!TIP]
+> **Developer & Agentic Editable Installs:**
+> If you are developing Smaug, running tests, or running AI agents on this repository, you should always install the package in **editable mode**:
+> ```bash
+> uv pip install -e ".[dev,mcp]"
+> # or
+> pip install -e ".[dev,mcp]"
+> ```
+> Installing in editable mode ensures that changes to the Python code are immediately live. Crucially, it also registers the custom plugin entry points (e.g. `smaug.parsers`), which are required for the tool to work correctly.
 
 ### Initialize a new workspace
 
@@ -293,46 +310,17 @@ To parse non-JHU specific PDF reports or specialized sponsor invoices, you can i
 
 See the [Writing Custom Parsers](docs/writing_parsers.md) and [Configuration Reference](docs/configuration.md) guides for a complete walkthrough.
 
-## Agent Integration
+## Agent Integration & Getting Started Guides
 
-Smaug can be used by AI agents (Claude, GPT, Gemini, etc.) in three ways:
+Smaug supports agentic workflows by providing three integration channels (CLI, Python API, and MCP) to query data, calculate burn rates, and run forecasts.
 
-### Skill file (CLI-based agents)
+To configure AI agents to work with Smaug, we provide getting started guides:
 
-Agents with shell access can read [`AGENTS.md`](AGENTS.md) to learn smaug's commands. This works with Claude Code, Gemini CLI, Cursor, and similar tools — no setup required.
-
-### Python API
-
-```python
-from smaug.api import SmaugAPI
-
-api = SmaugAPI("~/.smaug")
-projects = api.list_projects(status="active")
-forecast = api.stopwork_forecast("QUASAR")
-plan = api.spending_projection("QUASAR", months=12)
-budget = api.proposal_budget(pi=[{"name": "Smith", "effort_pct": 10}], phd=2)
-```
-
-### MCP Server
-
-For agents that support the [Model Context Protocol](https://modelcontextprotocol.io):
-
-```bash
-pip install smaug[mcp]
-smaug-mcp  # Starts MCP server on stdio
-```
-
-Configure in Claude Desktop (`claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "smaug": {
-      "command": "smaug-mcp",
-      "env": {"SMAUG_DATA_DIR": "/path/to/.smaug"}
-    }
-  }
-}
-```
+*   **[Agent Integration Overview](docs/agents/overview.md)**: A high-level introduction to the integration pathways (CLI, Python API, and MCP).
+*   **[Claude Code Getting Started Guide](docs/agents/claude_code.md)**: Step-by-step setup instructions for Anthropic's Claude Code command-line agent, utilizing the [CLAUDE.md](CLAUDE.md) pointer rules.
+*   **[Gemini & Antigravity Guide](docs/agents/gemini.md)**: Onboarding instructions for Google Gemini and Antigravity 2.0 workspace rules.
+*   **[Codex & Custom API-Driven Agents](docs/agents/codex_agents.md)**: Designing custom python script agents and pipeline wrappers utilizing OpenAI Codex / GPT APIs and `smaug dump` JSON outputs.
+*   **[Model Context Protocol (MCP) Guide](docs/agents/mcp_agents.md)**: Connecting Smaug's local `smaug-mcp` tool server directly to Claude Desktop and other MCP-compliant agents.
 
 ### Example Agentic Workflow: Project Plus-Up Spending Feasibility
 

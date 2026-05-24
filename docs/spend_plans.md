@@ -143,7 +143,7 @@ effort percentages and end dates:
 ┌──── Spend Plan: QUASAR ────────────────────────────────────┐
 │ Through June 2028                                          │
 │ Personnel: Faculty Smith 10%, Postdoc Chen 100%,           │
-│            PhD Garcia 50% (thru Sep 2027)                  │
+│            PhD Martinez 50% (thru Sep 2027)                │
 └────────────────────────────────────────────────────────────┘
 ```
 

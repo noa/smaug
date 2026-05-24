@@ -50,7 +50,7 @@ Summary: 1 errors, 2 warnings, 1 info
 
 January 2026
   ✗ Chen, Wei: $7,200.00 vs expected $6,000.00 (over by 20.0%)
-  ! Garcia, Maria: $4,500.00 vs expected $4,166.67 (over by 8.0%)
+  ! Martinez, Sofia: $4,500.00 vs expected $4,166.67 (over by 8.0%)
 
 December 2025
   ○ Johnson, Alex: Expected $2,708.33 but not found in report

@@ -9,7 +9,7 @@ travel:
     description: ICML 2026
     date: 2026-07-20
     amount: 3500.00
-    traveler: "Garcia, Maria"
+    traveler: "Martinez, Sofia"
     status: estimated
   - project: NEXUS
     description: ACL 2026
