@@ -13,6 +13,19 @@ Smaug helps PIs and lab managers track grant spending, project burn rates, manag
 
 ---
 
+## Motivation: Why Smaug?
+
+Managing academic research grant budgets is notoriously difficult. PIs and lab managers must navigate multiple separate institutional systems, compile fragmented PDF/CSV reports, track complex fringe and indirect cost (F&A) rates, and model personnel effort across projects.
+
+Smaug was created to address these high-level administration challenges:
+
+*   **Unified Spending & Effort View:** Provides a single, centralized command-line interface to inspect spending, travel, equipment purchases, and personnel effort across **all** of your sponsored grants and internal discretionary accounts.
+*   **Catching Spending Discrepancies:** Detects deviations and conflicts between expected monthly effort configurations (planned) and actual charges extracted from parsed expenditure reports (actual), letting you fix billing mistakes before they propagate.
+*   **Preventing Common Finance Issues:** Proactively flags common administrative hazards such as incorrect or overlapping personnel effort allocations across multiple projects, delayed sponsor invoices, and upcoming contractual spending ceilings.
+*   **Accurate Cash Flow & Forecasts for Sponsors:** Allows you to generate and export detailed, up-to-date monthly spending projection models (spend plans) to provide program managers and sponsors with high-fidelity cash flow estimates and stop-work forecasts.
+
+---
+
 ## Core Capabilities
 
 Smaug helps answer common administrative questions about project budgets and projections:
