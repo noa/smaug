@@ -2,7 +2,8 @@
 MCP (Model Context Protocol) server for smaug.
 
 Exposes smaug's budget tracking capabilities as read-only MCP tools
-for AI agents. Install with: pip install smaug[mcp]
+for AI agents. Install with: pip install -e ".[mcp]" (cloned repository)
+or pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
 
 Usage:
     smaug-mcp                          # stdio transport (default)
@@ -25,7 +26,10 @@ def main():
         from mcp.server.fastmcp import FastMCP
     except ImportError:
         print(
-            "MCP dependencies not installed. Install with:\n  pip install smaug[mcp]",
+            "MCP dependencies not installed. Install with:\n"
+            '  pip install -e ".[mcp]" (from a cloned repository root)\n'
+            "or:\n"
+            '  pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"',
             file=sys.stderr,
         )
         sys.exit(1)

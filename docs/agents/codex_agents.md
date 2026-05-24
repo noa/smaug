@@ -2,6 +2,11 @@
 
 This guide covers integrating Smaug with custom OpenAI Codex, GPT, and API-driven agents. Rather than dumping the entire project state into the prompt upfront or writing custom shell-execution loops, custom agents should interact with Smaug using dynamic tool calling.
 
+> [!NOTE]
+> **Choosing Your Development Approach:**
+> * **Developing / Customizing Smaug:** If you are building tools or custom wrappers that modify Smaug's internals or require running test suites, you should run your scripting and LLM agent sessions directly within the root of the cloned Smaug repository.
+> * **Standard Tool API Usage:** If you are building a pure budget forecasting dashboard or assistant that only queries existing data, you do not need to clone the repository. You can simply install the package directly from GitHub (`pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"`) and run `smaug-mcp` or import the Python API (`smaug.api.SmaugAPI`) inside your own separate application workspace.
+
 ---
 
 ## 1. Designing Tool-Calling Agents

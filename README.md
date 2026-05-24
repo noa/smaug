@@ -123,29 +123,45 @@ smaug personnel --anonymize
 
 ### Install
 
-The recommended way to install Smaug is as a global CLI tool using `uv tool` (or `pipx`):
+Since Smaug is a local git repository and not published to PyPI, you can install it using one of the following methods depending on your workflow:
+
+#### Option A: From a cloned local repository (Recommended for Developers/Savvy Users)
+Clone the repository and install it (optionally in editable mode for development and plugin registration):
 
 ```bash
-uv tool install smaug
-```
+git clone https://github.com/noa/smaug.git
+cd smaug
 
-Alternatively, install into an active virtual environment:
-
-```bash
-uv pip install smaug
+# Standard install
+pip install .
 # or
-pip install smaug
+uv pip install .
+
+# Editable install (Recommended for development, testing, or running local agents)
+pip install -e ".[dev,mcp]"
+# or
+uv pip install -e ".[dev,mcp]"
 ```
 
 > [!TIP]
 > **Developer & Agentic Editable Installs:**
-> If you are developing Smaug, running tests, or running AI agents on this repository, you should always install the package in **editable mode**:
-> ```bash
-> uv pip install -e ".[dev,mcp]"
-> # or
-> pip install -e ".[dev,mcp]"
-> ```
-> Installing in editable mode ensures that changes to the Python code are immediately live. Crucially, it also registers the custom plugin entry points (e.g. `smaug.parsers`), which are required for the tool to work correctly.
+> Installing in editable mode (`-e`) ensures that changes to the Python code are immediately live. Crucially, it also registers the custom plugin entry points (e.g. `smaug.parsers`), which are required for custom report parsers to work correctly.
+
+#### Option B: Directly from GitHub (Recommended for general non-dev use)
+If you do not want to clone the codebase and just want to install Smaug as a CLI/MCP tool inside your environment, you can install it directly from GitHub:
+
+```bash
+# Install CLI only
+pip install git+https://github.com/noa/smaug.git
+
+# Install CLI with MCP server support
+pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
+
+# Or using uv tool as a global CLI tool
+uv tool install git+https://github.com/noa/smaug.git
+# With MCP server support:
+uv tool install --with mcp git+https://github.com/noa/smaug.git
+```
 
 ### Initialize a new workspace
 
@@ -313,6 +329,11 @@ See the [Writing Custom Parsers](docs/writing_parsers.md) and [Configuration Ref
 ## Agent Integration & Getting Started Guides
 
 Smaug supports agentic workflows by providing three integration channels (CLI, Python API, and MCP) to query data, calculate burn rates, and run forecasts.
+
+> [!TIP]
+> **Choosing Your Runtime Setup (Cloned Repository vs. MCP Tool):**
+> * **Cloned Repository Setup (Recommended for Developers/Technically Savvy Users):** If you plan to customize Smaug, fix bugs, or have coding agents (like Claude Code or Gemini/Antigravity) run tests and modify the codebase, you should run the agent from the root of a cloned git repository. This bypasses MCP server configuration and allows agents to seamlessly operate on the local workspace in editable mode.
+> * **MCP Tool Setup (Recommended for End-Users):** If you simply want to use Smaug to manage your budgets, run forecasts, or model what-if scenarios without modifying its codebase, you do not need to clone the repository. Instead, configure Smaug's Model Context Protocol (MCP) server externally, allowing any MCP-compliant agent to query and manage your data without being run from the Smaug repository itself.
 
 To configure AI agents to work with Smaug, we provide getting started guides:
 

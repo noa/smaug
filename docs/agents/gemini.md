@@ -2,6 +2,11 @@
 
 This guide covers running Smaug with Google Gemini CLI and Antigravity.
 
+> [!TIP]
+> **Choosing Your Environment Setup:**
+> * **For Active Code Customization & Bug Fixes (Cloned Repo Setup):** If you are pair programming with Google Gemini or Antigravity to modify Smaug's code, add new features, or run local Python test suites, you should **run the agent session directly from the root of the cloned repository workspace**. This enables the agent to discover code rules, execute tests, and modify package files dynamically in editable mode.
+> * **For Pure Budget Tracking & Auditing (MCP Tool Setup):** If you only need Gemini to query and calculate budget forecasts on your data without changing Smaug's code, configure Smaug as an external tool provider via the Model Context Protocol (MCP). You do not need to clone the repository for this.
+
 ---
 
 ## 1. Gemini CLI
@@ -11,20 +16,20 @@ This guide covers running Smaug with Google Gemini CLI and Antigravity.
 Gemini CLI can interact with Smaug in two ways. Choose whichever fits your setup:
 
 **Option A — MCP Server (recommended):**
-Install Smaug with MCP support and register the server with Gemini:
+Install Smaug with MCP support from GitHub (since Smaug is not published on PyPI) and register the server with Gemini:
 
 ```bash
-pip install "smaug[mcp]"
+pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
 gemini mcp add smaug -- smaug-mcp
 ```
 
 This registers `smaug-mcp` as a tool provider. Gemini discovers all Smaug tools (list projects, forecast stop-work dates, run spend plans, etc.) automatically via their schema definitions. No further context is needed.
 
 **Option B — Shell execution with AGENTS.md context:**
-Install `smaug` so it is available on your PATH, then run `gemini` from the Smaug repository root. Gemini reads `AGENTS.md` at startup and learns how to invoke `smaug` CLI commands via its built-in shell execution tool.
+Clone the repository, install it locally so it is available on your PATH, then run `gemini` from the Smaug repository root. Gemini reads `AGENTS.md` at startup and learns how to invoke `smaug` CLI commands via its built-in shell execution tool.
 
 > [!TIP]
-> Both options require that `smaug` is installed (`pip install smaug` or `uv tool install smaug`). Option A works from any directory. Option B requires running from the repository root so Gemini can read `AGENTS.md`.
+> Both options require that `smaug` is installed (either directly from GitHub via `pip install git+https://github.com/noa/smaug.git` or locally from a cloned repo via `pip install -e .`). Option A works from any directory. Option B requires running from the repository root so Gemini can read `AGENTS.md`.
 
 ### CLI Examples
 

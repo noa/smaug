@@ -191,9 +191,19 @@ plan = api.spend_plan(["QUASAR"], add_personnel=[{"type": "phd", "effort_pct": 1
 
 ## MCP Server
 
-Smaug also ships an MCP server for agent tool integration:
+Smaug also ships an MCP server for agent tool integration. Since Smaug is a local git repository (not published to PyPI), install it using one of the following methods:
 
+**Method A: From a cloned local repository:**
 ```bash
-pip install smaug[mcp]
+pip install -e ".[mcp]"
+```
+
+**Method B: Directly from GitHub (no repository clone required):**
+```bash
+pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
+```
+
+Then start the MCP server:
+```bash
 smaug-mcp  # Starts MCP server on stdio
 ```

@@ -2,6 +2,11 @@
 
 [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code) is an agentic command-line tool designed by Anthropic that can edit code, run tests, and execute CLI commands. This guide explains how to configure and run Claude Code with the Smaug codebase and runtime tools.
 
+> [!IMPORTANT]
+> **Deciding on Your Setup Context:**
+> * **Developing / Customizing Smaug (Recommended):** If you are technically savvy, developing Smaug, or using Claude Code to make direct codebase enhancements or bug fixes, you should clone this repository and **run Claude Code directly from the root of the repository**. This allows Claude Code to leverage `CLAUDE.md` to run test suites and manage code updates easily in editable mode.
+> * **Non-Dev Usage Only:** If you only want to use Smaug as a budget-tracking tool without modifying the codebase, you do not need to clone the repository or run Claude Code within it. Instead, follow **Section 2** below to connect Claude Code to the standalone `smaug-mcp` tool server.
+
 ---
 
 ## 1. Project-wide Instructions via `CLAUDE.md`
@@ -23,11 +28,11 @@ Claude Code can use Model Context Protocol (MCP) servers to gain advanced, struc
 
 ### step-by-step MCP Configuration
 
-1. **Install Smaug with MCP support** in your environment:
+1. **Install Smaug with MCP support** in your environment directly from GitHub (since Smaug is not published on PyPI):
    ```bash
-   pip install "smaug[mcp]"
+   pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
    # or using uv:
-   uv pip install "smaug[mcp]"
+   uv pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
    ```
 
 2. **Locate Claude Code's configuration file**:

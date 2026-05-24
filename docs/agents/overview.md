@@ -36,6 +36,22 @@ AI agents must understand where Smaug stores state to run effectively. Smaug is 
 
 ---
 
+## Recommended Execution Contexts: Repository vs. MCP Tool
+
+Depending on your role and objectives, you should choose one of two distinct execution contexts:
+
+### 1. Cloned Repository Setup (For Developers & Coding Agents)
+If you are a developer, plan to customize the Smaug Python package, make bug fixes, or intend to use coding agents (such as Claude Code or Gemini/Antigravity) to perform active code edits and run pytest suites, you should **run the agent from the root of a cloned git repository**.
+* **Why:** This avoids MCP configuration, runs automatically in editable mode (`pip install -e .`), and makes it easy to submit pull requests or test code changes instantly.
+* **Best Fit For:** Technically savvy users, developers, and code-modifying agent sessions.
+
+### 2. Standalone MCP Server Setup (For End-Users & Pure Query Agents)
+If you simply want to utilize Smaug to track budgets, audit spending, project stop-work dates, and run what-if scenarios without any intention of altering the source code, you should **use the MCP server externally**.
+* **Why:** You do not need to clone the codebase. Simply install Smaug directly from GitHub (`pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"`) and configure the `smaug-mcp` executable inside your agent's config (e.g., Claude Desktop or Gemini). The agent queries and operates on your local `~/.smaug` data seamlessly.
+* **Best Fit For:** Lab managers, PIs, and end-user workflow agents.
+
+---
+
 ## Choosing the Best Integration Channel
 
 Depending on the agent's architecture, choose the corresponding channel:

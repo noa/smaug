@@ -4,16 +4,29 @@ Smaug includes native support for the **Model Context Protocol (MCP)**, an open 
 
 By starting the `smaug-mcp` server, any MCP-compliant agent (such as Claude Desktop or Claude Code) can natively interact with your academic grant budgets as schema-validated tools.
 
+> [!NOTE]
+> **Who is the MCP setup for?**
+> * **Recommended for Non-Dev Usage:** Using the Model Context Protocol is the recommended pathway for users who simply want to query budgets, audit spending, run projections, and manage personnel allocations without modifying Smaug's code. **You do not need to clone the code repository or run the agent from it.**
+> * **For Developer & Code-Modifying Agents:** If you plan to customize the tool, write custom parser plugins, or use coding agents to develop features inside the Smaug codebase, you should clone the repo and run your agent from the repository root instead of (or in addition to) using an external MCP server setup.
+
 ---
 
 ## 1. Installation
 
-Ensure the `mcp` extra is installed inside your Smaug environment:
+Since Smaug is a local git repository and not published to PyPI, you can install the package with `mcp` support using one of the following methods depending on your setup:
 
+### Method A: From a cloned local repository:
 ```bash
-pip install "smaug[mcp]"
+pip install -e ".[mcp]"
 # or using uv:
-uv pip install "smaug[mcp]"
+uv pip install -e ".[mcp]"
+```
+
+### Method B: Directly from GitHub (no repository clone required):
+```bash
+pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
+# or using uv:
+uv pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
 ```
 
 Verify that the MCP server executable is in your path by running:
