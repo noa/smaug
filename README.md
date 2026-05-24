@@ -193,9 +193,17 @@ This command will prompt you with a warning and require you to type **`CLEAR`** 
 
 #### 2. Starting a New Project
 
-Once your workspace is clean, you can start a new project in two ways:
+Once your workspace is clean, you can start a new project in three ways:
 
-##### Option A: Via the CLI (Recommended)
+##### Option A: Via AI Agent One-Liners (Recommended & Fastest!)
+
+If you are running a coding agent like Claude Code or Google Gemini inside a cloned repository, you can delegate the entire project initialization and report ingestion process using a single natural language command. The agent will automatically clean the workspace, configure the project metadata, set up personnel effort allocations, parse financial PDFs, and verify the resulting budget summaries:
+
+```bash
+claude "Clear existing projects and create a new project ATLAS for $1M with two PhD students, then import report.pdf and summarize the current spending vs totals"
+```
+
+##### Option B: Via the CLI
 
 1. **Add a sponsored or discretionary project** (this automatically appends it to `manifest.yaml`):
    ```bash
@@ -224,7 +232,7 @@ Once your workspace is clean, you can start a new project in two ways:
    smaug report import /path/to/monthly_report.pdf
    ```
 
-##### Option B: By Editing YAML Directly
+##### Option C: By Editing YAML Directly
 
 You can also define your project, personnel, and expenses by editing the YAML configuration files in `~/.smaug/projects/` directly. Ensure you follow the schemas detailed in the [Configuration Reference](docs/configuration.md).
 
