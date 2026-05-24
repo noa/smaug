@@ -24,6 +24,10 @@ Smaug was created to address these high-level administration challenges:
 *   **Preventing Common Finance Issues:** Proactively flags common administrative hazards such as incorrect or overlapping personnel effort allocations across multiple projects, delayed sponsor invoices, and upcoming contractual spending ceilings.
 *   **Accurate Cash Flow & Forecasts for Sponsors:** Allows you to generate and export detailed, up-to-date monthly spending projection models (spend plans) to provide program managers and sponsors with high-fidelity cash flow estimates and stop-work forecasts.
 
+> [!WARNING]
+> **The Principal Investigator's Ultimate Responsibility:**
+> While departmental financial specialists and accountants provide vital administrative assistance, **ultimate legal, financial, and scientific responsibility for a grant rests with the Principal Investigator (PI)**. The PI must ensure that expenditures are accurate, spending is on target, and all sponsor terms are met. Financial discrepancies, unmonitored cost overruns, or failures to invoice correctly can have serious institutional and professional implications—including audits, disallowed costs, or immediate sponsor-enforced stop-work orders. Smaug is designed to provide PIs with direct, hands-on transparency and predictive models to actively manage this fiduciary responsibility.
+
 ---
 
 ## Core Capabilities
