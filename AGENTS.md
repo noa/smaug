@@ -148,6 +148,9 @@ smaug init
 # Revert/undo the last configuration change
 smaug undo
 
+# Clear all projects, personnel, and reports (requires confirmation: "CLEAR")
+smaug clear
+
 # Export a styled Excel spreadsheet spend plan
 smaug export QUASAR spend_plan.xlsx
 

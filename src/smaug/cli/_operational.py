@@ -798,3 +798,123 @@ def cmd_export(store: ProjectStore, args) -> None:
 
     wb.save(filename)
     print(f"Successfully exported styled spend plan to: {filename}")
+
+
+def cmd_clear(store: ProjectStore, args) -> None:
+    """Clear all projects, personnel, travel logs, and spending reports for a clean slate."""
+    import shutil
+    from pathlib import Path
+
+    from ..yaml_utils import git_commit_change, yaml_transaction
+
+    data_dir = Path(args.data_dir)
+    print(
+        f"\n{color('WARNING: You are about to clear all Smaug data in:', Colors.RED + Colors.BOLD)} {data_dir}\n"
+    )
+    print("This will completely delete:")
+    print("  - All projects and discretionary accounts from manifest.yaml")
+    print("  - All personnel definitions from personnel_config.yaml")
+    print("  - All travel budget logs from travel_config.yaml")
+    print("  - All recurrent/one-time purchases from purchases_config.yaml")
+    print("  - All project-specific folders under projects/ (QUASAR, NEXUS, etc.)")
+    print("  - All spending report and invoice files under reports/")
+    print(
+        f"\n{color('This action is irreversible (unless you have uncommitted git changes).', Colors.YELLOW)}"
+    )
+
+    # Prompt for confirmation
+    try:
+        user_input = input("\nType 'CLEAR' to confirm deletion: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("\nOperation cancelled.")
+        return
+
+    if user_input != "CLEAR":
+        print("Confirmation failed. No changes were made.")
+        return
+
+    print("\nClearing Smaug data...")
+
+    # 1. Reset configuration files to empty states
+    projects_dir = data_dir / "projects"
+    manifest_path = projects_dir / "manifest.yaml"
+    personnel_path = projects_dir / "personnel_config.yaml"
+    travel_path = projects_dir / "travel_config.yaml"
+    purchases_path = projects_dir / "purchases_config.yaml"
+    aliases_path = projects_dir / "aliases.yaml"
+
+    if manifest_path.exists():
+        with yaml_transaction(manifest_path) as data:
+            data.clear()
+            data["projects"] = {}
+            data["discretionary"] = {}
+        print("  Cleared manifest.yaml")
+
+    if personnel_path.exists():
+        with yaml_transaction(personnel_path) as data:
+            data.clear()
+            data["personnel"] = []
+        print("  Cleared personnel_config.yaml")
+
+    if travel_path.exists():
+        with yaml_transaction(travel_path) as data:
+            data.clear()
+            data["travel"] = []
+        print("  Cleared travel_config.yaml")
+
+    if purchases_path.exists():
+        with yaml_transaction(purchases_path) as data:
+            data.clear()
+            data["items"] = []
+        print("  Cleared purchases_config.yaml")
+
+    if aliases_path.exists():
+        try:
+            aliases_path.unlink()
+            print("  Removed aliases.yaml")
+        except Exception as e:
+            print(f"  Warning: Could not remove aliases.yaml: {e}")
+
+    # 2. Remove project-specific subdirectories under projects/
+    if projects_dir.exists():
+        for item in projects_dir.iterdir():
+            if item.is_dir():
+                try:
+                    shutil.rmtree(item)
+                    print(f"  Removed project directory: projects/{item.name}")
+                except Exception as e:
+                    print(f"  Warning: Could not remove directory {item.name}: {e}")
+
+    # 3. Clear reports directories (sponsored, non-sponsored, invoices)
+    reports_dir = data_dir / "reports"
+    if reports_dir.exists():
+        for sub in ["sponsored", "non-sponsored", "invoices"]:
+            sub_dir = reports_dir / sub
+            if sub_dir.exists():
+                for item in sub_dir.iterdir():
+                    if item.is_file():
+                        try:
+                            item.unlink()
+                            print(f"  Removed report file: reports/{sub}/{item.name}")
+                        except Exception as e:
+                            print(f"  Warning: Could not remove report file {item.name}: {e}")
+                    elif item.is_dir():
+                        try:
+                            shutil.rmtree(item)
+                            print(f"  Removed report directory: reports/{sub}/{item.name}")
+                        except Exception as e:
+                            print(f"  Warning: Could not remove report directory {item.name}: {e}")
+
+    # Remove anonymizer mapping if it exists
+    anon_mapping_path = data_dir / ".anonymizer_mapping.yaml"
+    if anon_mapping_path.exists():
+        try:
+            anon_mapping_path.unlink()
+            print("  Removed Anonymizer mapping file")
+        except Exception as e:
+            print(f"  Warning: Could not remove Anonymizer mapping file: {e}")
+
+    print("\nSmaug data directory cleared successfully!")
+
+    # 4. Commit change to git
+    git_commit_change(data_dir, "clear: Purged all projects, personnel, and reports")

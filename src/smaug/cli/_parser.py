@@ -14,6 +14,7 @@ from ._financial import (
 )
 from ._import import cmd_report
 from ._operational import (
+    cmd_clear,
     cmd_expense,
     cmd_export,
     cmd_health,
@@ -571,6 +572,10 @@ def main():
     undo_parser = subparsers.add_parser("undo", help="Undo the last configuration change")
     undo_parser.set_defaults(func=cmd_undo)
 
+    # clear command
+    clear_parser = subparsers.add_parser("clear", help="Clear all projects, personnel, and reports")
+    clear_parser.set_defaults(func=cmd_clear)
+
     args = parser.parse_args()
 
     # Resolve data directory through priority chain
@@ -585,7 +590,7 @@ def main():
 
     # Load data
     store = ProjectStore(data_dir=args.data_dir)
-    if args.command != "init":
+    if args.command not in ("init", "clear"):
         try:
             store.load_all()
         except FileNotFoundError as e:
