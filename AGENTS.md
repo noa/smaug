@@ -88,6 +88,9 @@ smaug audit --months 6 --threshold 15
 # Budget vs contractual ceiling
 smaug budget-vs-actuals QUASAR
 
+# Contractual budget periods (funding increments)
+smaug budget list QUASAR              # Show all contract periods and amounts
+
 # Check for missing report months
 smaug gaps
 
@@ -141,6 +144,11 @@ smaug note add QUASAR "Budget Review" --message "Notes here..."
 smaug note add QUASAR "Analysis"        # Opens $EDITOR
 smaug note import QUASAR /path/to/file.md --title "Imported Doc"
 smaug note remove QUASAR 1              # Remove by index
+
+# Contractual budget periods (funding increments)
+smaug budget add QUASAR --year 3 --start 2027-01 --end 2027-12 --total 550000
+smaug budget add QUASAR --year 3 --start 2027-01 --end 2027-12 --total 550000 --direct 354839 --idc 195161
+smaug budget set QUASAR --year 2 --total 520000
 
 # Initialize a new Smaug workspace with git change-tracking
 smaug init

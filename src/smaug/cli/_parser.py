@@ -4,6 +4,7 @@ import argparse
 import sys
 
 from ..store import ProjectStore
+from ._budget_commands import cmd_budget
 from ._financial import (
     cmd_budget_vs_actuals,
     cmd_optimize,
@@ -257,10 +258,64 @@ def main():
     projend_parser.set_defaults(func=cmd_set_project_end)
 
     # set-budget command
-    budget_parser = subparsers.add_parser("set-budget", help="Set project budget")
-    budget_parser.add_argument("project", help="Project short name")
-    budget_parser.add_argument("budget", help="Total budget amount")
-    budget_parser.set_defaults(func=cmd_set_budget)
+    setbudget_parser = subparsers.add_parser("set-budget", help="Set project budget")
+    setbudget_parser.add_argument("project", help="Project short name")
+    setbudget_parser.add_argument("budget", help="Total budget amount")
+    setbudget_parser.set_defaults(func=cmd_set_budget)
+
+    # budget command (subcommand group for contractual budget periods)
+    budget_parser = subparsers.add_parser(
+        "budget", help="Manage contractual budget periods (budget_config.yaml)"
+    )
+    budget_subparsers = budget_parser.add_subparsers(dest="action", required=True)
+
+    # budget list
+    budget_list = budget_subparsers.add_parser(
+        "list", help="List contractual budget periods for a project"
+    )
+    budget_list.add_argument("project", help="Project short name")
+
+    # budget add
+    budget_add = budget_subparsers.add_parser(
+        "add", help="Add a new funding increment (contract period)"
+    )
+    budget_add.add_argument("project", help="Project short name")
+    budget_add.add_argument("--year", type=int, required=True, help="Period number (e.g., 1, 2, 3)")
+    budget_add.add_argument(
+        "--start", required=True, help="Period start date (YYYY-MM or YYYY-MM-DD)"
+    )
+    budget_add.add_argument("--end", required=True, help="Period end date (YYYY-MM or YYYY-MM-DD)")
+    budget_add.add_argument(
+        "--total", type=float, required=True, help="Total amount (direct + IDC)"
+    )
+    budget_add.add_argument(
+        "--direct",
+        type=float,
+        default=None,
+        help="Direct costs (if omitted, derived from --total using IDC rate)",
+    )
+    budget_add.add_argument(
+        "--idc",
+        type=float,
+        default=None,
+        help="Indirect costs (if omitted, derived from --total using IDC rate)",
+    )
+
+    # budget set
+    budget_set = budget_subparsers.add_parser("set", help="Modify an existing contract period")
+    budget_set.add_argument("project", help="Project short name")
+    budget_set.add_argument("--year", type=int, required=True, help="Period number to modify")
+    budget_set.add_argument("--total", type=float, default=None, help="New total amount")
+    budget_set.add_argument("--direct", type=float, default=None, help="New direct costs")
+    budget_set.add_argument("--idc", type=float, default=None, help="New indirect costs")
+    budget_set.add_argument(
+        "--start", default=None, help="New period start date (YYYY-MM or YYYY-MM-DD)"
+    )
+    budget_set.add_argument(
+        "--end", default=None, help="New period end date (YYYY-MM or YYYY-MM-DD)"
+    )
+
+    budget_parser.set_defaults(func=cmd_budget)
 
     # set-status command
     setstatus_parser = subparsers.add_parser("set-status", help="Set project lifecycle status")
