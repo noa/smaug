@@ -91,6 +91,14 @@ claude "Add a new graduate student named John Doe to project QUASAR at 50% effor
 claude "Run the test suite and fix any failing tests in the parser logic"
 ```
 
+> [!TIP]
+> **CLI Automation & Skipping Permission Prompts:**
+> When running Claude Code non-interactively using `-p` (or `--print`) in shell scripts, it may prompt for confirmation before executing commands or editing files. To automate this safely without prompts (and avoid using the scary `--dangerously-skip-permissions` override), use the standard `--permission-mode` flag:
+> ```bash
+> claude -p "Check NEXUS stopwork" --permission-mode bypassPermissions
+> ```
+> This executes all read, write, and command tools automatically within directories you have trusted. Ensure you have authorized the repository by responding `y` to the initial workspace trust prompt upon starting Claude Code in this folder.
+
 When pair-programming inside the interactive Claude Code chat:
 
 ### Code Maintenance and Debugging

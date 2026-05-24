@@ -15,18 +15,45 @@ Smaug helps PIs and lab managers track grant spending, project burn rates, manag
 
 ## Motivation: Why Smaug?
 
-Managing academic research grant budgets is notoriously difficult. PIs and lab managers must navigate multiple separate institutional systems, compile fragmented PDF/CSV reports, track complex fringe and indirect cost (F&A) rates, and model personnel effort across projects.
+Managing academic research grant budgets is complex and time-consuming. PIs and lab managers must navigate multiple separate institutional systems, compile fragmented PDF/CSV reports, track fringe and indirect cost (F&A) rates, and model personnel effort across projects.
 
 Smaug was created to address these high-level administration challenges:
 
 *   **Unified Spending & Effort View:** Provides a single, centralized command-line interface to inspect spending, travel, equipment purchases, and personnel effort across **all** of your sponsored grants and internal discretionary accounts.
 *   **Catching Spending Discrepancies:** Detects deviations and conflicts between expected monthly effort configurations (planned) and actual charges extracted from parsed expenditure reports (actual), letting you fix billing mistakes before they propagate.
-*   **Preventing Common Finance Issues:** Proactively flags common administrative hazards such as incorrect or overlapping personnel effort allocations across multiple projects, delayed sponsor invoices, and upcoming contractual spending ceilings.
-*   **Accurate Cash Flow & Forecasts for Sponsors:** Allows you to generate and export detailed, up-to-date monthly spending projection models (spend plans) to provide program managers and sponsors with high-fidelity cash flow estimates and stop-work forecasts.
+*   **Preventing Common Finance Issues:** Flags common administrative problems such as incorrect or overlapping personnel effort allocations across multiple projects, delayed sponsor invoices, and approaching contractual spending ceilings.
+*   **Cash Flow Estimates for Sponsors:** Generates and exports monthly spending projection models (spend plans) that can be shared with program managers and sponsors as cash flow estimates and stop-work forecasts.
 
 > [!WARNING]
 > **The Principal Investigator's Ultimate Responsibility:**
-> While departmental financial specialists and accountants provide vital administrative assistance, **ultimate legal, financial, and scientific responsibility for a grant rests with the Principal Investigator (PI)**. The PI must ensure that expenditures are accurate, spending is on target, and all sponsor terms are met. Financial discrepancies, unmonitored cost overruns, or failures to invoice correctly can have serious institutional and professional implications—including audits, disallowed costs, or immediate sponsor-enforced stop-work orders. Smaug is designed to provide PIs with direct, hands-on transparency and predictive models to actively manage this fiduciary responsibility.
+> While departmental financial specialists and accountants provide vital administrative assistance, **ultimate responsibility for a grant rests with the Principal Investigator (PI)**. The PI must ensure that expenditures are accurate, spending is on target, and all sponsor terms are met. Financial discrepancies, unmonitored cost overruns, or failures to invoice correctly can have serious institutional and professional implications—including audits, disallowed costs, or immediate sponsor-enforced stop-work orders. Smaug provides PIs with direct visibility into their spending data and forward-looking projections to help manage this responsibility.
+
+---
+
+## Sponsored Grant Lifecycle
+
+For sponsored awards, Smaug maps to the natural lifecycle of a research grant:
+
+1. **Proposal** — Generate multi-year budget tables with salary escalation, fringe, tuition, and F&A rates (`smaug proposal`). The proposal budget establishes the *expected* spending plan: how much will be spent, on whom, and when.
+
+2. **Award & Setup** — Once a proposal is accepted, create the project in Smaug with the contractual budget ceiling, personnel effort allocations, and budget periods (`smaug add-project`, `smaug add-person`, `smaug budget add`).
+
+3. **Active Tracking** — As the institution issues monthly expenditure reports, import them to track cumulative *actual* spending against the expected baseline (`smaug report import`). Generate spend plans and stop-work forecasts to project future cash flow (`smaug spend-plan`, `smaug stopwork`).
+
+4. **Incremental Funding & Modifications** — Record contract modifications, new budget periods, or ceiling adjustments as they occur (`smaug budget add`, `smaug set-budget`).
+
+5. **Audit & Reconciliation** — Compare actual charges against expected personnel effort to detect billing discrepancies, over-commitments, or under-allocations (`smaug audit`). Cross-check sponsor invoices against internal reports (`smaug invoice import`).
+
+The proposal establishes what spending *should* look like; the imported spending reports measure what *actually* happened. Smaug's role is to make these two views easy to compare and reconcile throughout the life of an award.
+
+> [!TIP]
+> **You don't need to memorize these commands.** If you're using a coding agent (Claude Code, Gemini, etc.), you can describe what you need in plain English and the agent will select the right Smaug commands for you:
+> ```bash
+> claude "Generate a 3-year proposal budget for 1 PI at 10% and 2 PhD students"
+> claude "Set up project ATLAS with a $500k ceiling ending June 2028, add two grad students"
+> claude "Import this month's spending report and flag any discrepancies against expected effort"
+> claude "We got a $200k supplement on ATLAS — update the budget and reforecast the stop-work date"
+> ```
 
 ---
 
@@ -212,13 +239,53 @@ This command will prompt you with a warning and require you to type **`CLEAR`** 
 
 Once your workspace is clean, you can start a new project in three ways:
 
-##### Option A: Via AI Agent One-Liners (Recommended & Fastest!)
+##### Option A: Via AI Agent One-Liners
 
-If you are running a coding agent like Claude Code or Google Gemini inside a cloned repository, you can delegate the entire project initialization and report ingestion process using a single natural language command. The agent will automatically clean the workspace, configure the project metadata, set up personnel effort allocations, parse financial PDFs, and verify the resulting budget summaries:
+If you are running a coding agent like Claude Code or Google Gemini inside a cloned repository, you can use a single natural language command to set up a project. The agent will attempt to configure the project metadata, set up personnel effort allocations, parse financial PDFs, and display the resulting budget summaries:
 
 ```bash
-claude "Clear existing projects and create a new project ATLAS for $1M with two PhD students, then import report.pdf and summarize the current spending vs totals"
+claude "Create a new project ATLAS for $1M with two PhD students, then import report.pdf and summarize the current spending vs totals"
 ```
+
+*Output of the non-interactive agent execution (`claude -p`):*
+```text
+Here's the full picture for ATLAS:
+
+---
+
+**Project Setup**
+ATLAS already existed in the demo data with $1M budget and two PhD students (Grad1 and Grad2, both at 100% effort). `report.pdf` was also already imported (September 2025).
+
+**Spending vs. Budget Summary**
+
+| Category | Amount |
+|---|---|
+| Total Budget (Ceiling) | $1,000,000 |
+| **Total Spent** (Sep 2025) | **$200,000** |
+| Committed | $5,000 |
+| Spent + Committed | $205,000 |
+| **Budget Utilized** | **20.8%** |
+| Remaining | $795,000 |
+
+**Category Breakdown (Cumulative)**
+- Salaries & Wages: $80,000
+- Fringe Benefits: $16,000
+- Tuition & Fees: $20,000
+- Health Insurance: $4,000
+- Travel: $8,000
+- Other Expenses: $12,000
+- Indirect Costs (IDC): $60,000
+
+**Burn Rate & Outlook**
+- Monthly burn: ~$12,917 (salary + IDC for the two PhD students)
+- At this rate, the projected 12-month spend is ~$195K, putting the project well within budget — though no end date is set, so stop-work is unconstrained.
+
+**Key note:** The two PhD students account for essentially the entire ongoing burn rate. The $200K already spent includes earlier activity (other personnel like Chen, Wei appear in the report but have no active effort allocation).
+```
+
+> [!TIP]
+> **Skipping Tool Confirmation Prompts in Automation:**
+> When running Claude Code non-interactively in shell scripts via `-p` (or `--print`), you can automate tool approvals cleanly without manual prompts by appending `--permission-mode bypassPermissions` to the command line. This is a much safer, standard alternative to the `--dangerously-skip-permissions` flag and works inside any directory you have authorized via Claude's initial trust prompt.
 
 ##### Option B: Via the CLI
 
@@ -357,7 +424,7 @@ Smaug supports agentic workflows by providing three integration channels (CLI, P
 
 > [!TIP]
 > **Choosing Your Runtime Setup (Cloned Repository vs. MCP Tool):**
-> * **Cloned Repository Setup (Recommended for Developers/Technically Savvy Users):** If you plan to customize Smaug, fix bugs, or have coding agents (like Claude Code or Gemini/Antigravity) run tests and modify the codebase, you should run the agent from the root of a cloned git repository. This bypasses MCP server configuration and allows agents to seamlessly operate on the local workspace in editable mode.
+> * **Cloned Repository Setup (Recommended for Developers/Technically Savvy Users):** If you plan to customize Smaug, fix bugs, or have coding agents (like Claude Code or Gemini/Antigravity) run tests and modify the codebase, you should run the agent from the root of a cloned git repository. This bypasses MCP server configuration and allows agents to operate directly on the local workspace in editable mode.
 > * **MCP Tool Setup (Recommended for End-Users):** If you simply want to use Smaug to manage your budgets, run forecasts, or model what-if scenarios without modifying its codebase, you do not need to clone the repository. Instead, configure Smaug's Model Context Protocol (MCP) server externally, allowing any MCP-compliant agent to query and manage your data without being run from the Smaug repository itself.
 
 To configure AI agents to work with Smaug, we provide getting started guides:
@@ -408,7 +475,7 @@ print(f"Postdoc option cost: ${postdoc_cost:,.2f}")  # Calculates salary + 21.1%
 print(f"2x PhD option cost: ${phd_cost:,.2f}")        # Calculates stipends + Sept tuition/insurance + F&A
 ```
 
-Once the agent selects the optimal plan (e.g., adding a Postdoc and two PhD students at 50% effort, leaving the remainder to purchase an F&A-exempt GPU server), it can execute the CLI setup commands directly:
+Once the agent identifies a suitable plan (e.g., adding a Postdoc and two PhD students at 50% effort, leaving the remainder to purchase an F&A-exempt GPU server), it can execute the CLI setup commands directly:
 
 ```bash
 # Add postdoc and graduate students to the project configuration
