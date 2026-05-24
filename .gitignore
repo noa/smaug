@@ -10,6 +10,7 @@ sponsored_costs_summary.csv
 # Report files (may contain sensitive financial data)
 *.pdf
 *.xlsx
+!examples/reports/sponsored/ATLAS_toy_report.pdf
 
 # ----- Python -----
 __pycache__/
