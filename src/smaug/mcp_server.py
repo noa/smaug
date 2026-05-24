@@ -34,7 +34,7 @@ def main():
 
     mcp = FastMCP(
         "smaug",
-        description="Academic research budget tracking and spending projections",
+        instructions="Academic research budget tracking and spending projections",
     )
 
     # Allow --data-dir override via argv
