@@ -37,12 +37,13 @@ class TestCollectReportFiles:
         assert len(files) == 1
         assert files[0] == FIXTURES_CSV
 
-    def test_directory_finds_csvs(self):
+    def test_directory_finds_reports(self):
         files = _collect_report_files(EXAMPLES_DIR / "reports" / "sponsored")
-        assert len(files) == 2
+        assert len(files) == 3
         names = {f.name for f in files}
         assert "quasar_2025_2026.csv" in names
         assert "nexus_2025_2026.csv" in names
+        assert "ATLAS_toy_report.pdf" in names
 
     def test_empty_directory(self, tmp_path):
         empty = tmp_path / "empty"
@@ -164,10 +165,11 @@ class TestBatchImport:
         for f in files:
             results.append(_import_single_file(f, target, report_parsers))
 
-        assert len(results) == 2
+        assert len(results) == 3
         assert all(r["status"] == "imported" for r in results)
         assert (target / "quasar_2025_2026.csv").exists()
         assert (target / "nexus_2025_2026.csv").exists()
+        assert (target / "ATLAS_toy_report.pdf").exists()
 
 
 class TestInvoiceImport:
