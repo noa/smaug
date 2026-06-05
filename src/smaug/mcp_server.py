@@ -294,6 +294,144 @@ def main():
         return json.dumps(calendar_data, indent=2)
 
     # ------------------------------------------------------------------
+    # Import Tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    def import_report(
+        path: str,
+        report_type: str = "sponsored",
+        force: bool = False,
+    ) -> str:
+        """Import spending report(s) from a file or directory into smaug.
+
+        Parses PDF or CSV spending reports, validates them, and copies them
+        into the smaug data directory for tracking.
+
+        Args:
+            path: Absolute path to a report file (PDF/CSV) or directory of reports.
+            report_type: Type of report: 'sponsored' (grant-funded) or 'non-sponsored' (discretionary).
+            force: If true, overwrite existing files with the same name.
+        """
+        from pathlib import Path as _Path
+
+        from .cli._import import _collect_report_files, _import_single_file
+        from .parsers import discover_parsers
+
+        source = _Path(path).expanduser()
+        if not source.exists():
+            return json.dumps({"error": f"Path not found: {path}"})
+
+        data_path = _Path(data_dir).expanduser()
+        target_dir = data_path / "reports" / report_type
+
+        report_parsers, _ = discover_parsers()
+        if not report_parsers:
+            return json.dumps({"error": "No report parsers available"})
+
+        files = _collect_report_files(source)
+        if not files:
+            return json.dumps({"error": f"No report files (PDF, CSV) found at: {path}"})
+
+        results = []
+        for file_path in files:
+            result = _import_single_file(
+                file_path,
+                target_dir,
+                report_parsers,
+                dry_run=False,
+                force=force,
+            )
+            results.append(result)
+
+        imported = sum(1 for r in results if r["status"] == "imported")
+        skipped = sum(1 for r in results if r["status"] == "skipped")
+        errors = sum(1 for r in results if r["status"] == "error")
+
+        return json.dumps(
+            {
+                "summary": {
+                    "imported": imported,
+                    "skipped": skipped,
+                    "errors": errors,
+                    "target_directory": str(target_dir),
+                },
+                "results": results,
+            },
+            indent=2,
+        )
+
+    @mcp.tool()
+    def import_invoice(
+        path: str,
+        project: str | None = None,
+        force: bool = False,
+    ) -> str:
+        """Import sponsor invoice PDF(s) into smaug.
+
+        Parses lockbox invoice PDFs, extracts billing data, and copies them
+        into the smaug data directory for validation against spending reports.
+
+        Args:
+            path: Absolute path to an invoice PDF or directory of invoices.
+            project: Explicitly assign to a project (overrides auto-detection).
+            force: If true, overwrite existing files with the same name.
+        """
+        from pathlib import Path as _Path
+
+        from .cli._import import _collect_report_files, _import_single_invoice
+        from .parsers import discover_parsers
+        from .store import ProjectStore as _Store
+
+        source = _Path(path).expanduser()
+        if not source.exists():
+            return json.dumps({"error": f"Path not found: {path}"})
+
+        data_path = _Path(data_dir).expanduser()
+        target_dir = data_path / "reports" / "invoices"
+
+        _, invoice_parsers = discover_parsers()
+        if not invoice_parsers:
+            return json.dumps({"error": "No invoice parsers available"})
+
+        store = _Store(data_dir=data_dir)
+        store.load_all()
+
+        files = _collect_report_files(source)
+        if not files:
+            return json.dumps({"error": f"No invoice files found at: {path}"})
+
+        results = []
+        for file_path in files:
+            result = _import_single_invoice(
+                file_path,
+                target_dir,
+                invoice_parsers,
+                store,
+                override_project=project,
+                dry_run=False,
+                force=force,
+            )
+            results.append(result)
+
+        imported = sum(1 for r in results if r["status"] == "imported")
+        skipped = sum(1 for r in results if r["status"] == "skipped")
+        errors = sum(1 for r in results if r["status"] == "error")
+
+        return json.dumps(
+            {
+                "summary": {
+                    "imported": imported,
+                    "skipped": skipped,
+                    "errors": errors,
+                    "target_directory": str(target_dir),
+                },
+                "results": results,
+            },
+            indent=2,
+        )
+
+    # ------------------------------------------------------------------
     # Write Tools
     # ------------------------------------------------------------------
 
