@@ -129,6 +129,11 @@ def cmd_set_salary(store: ProjectStore, args) -> None:
         print(f"Error: Personnel config not found: {config_path}")
         return
 
+    if getattr(args, "start", None):
+        args.start = parse_date_input(args.start)
+    if getattr(args, "end", None):
+        args.end = parse_date_input(args.end)
+
     # Parse salary
     try:
         salary = int(args.salary)
@@ -241,6 +246,11 @@ def cmd_set_effort(store: ProjectStore, args) -> None:
         print(f"Error: Personnel config not found: {config_path}")
         return
 
+    if getattr(args, "start", None):
+        args.start = parse_date_input(args.start)
+    if getattr(args, "end", None):
+        args.end = parse_date_input(args.end)
+
     # Resolve name - could be an index number or actual name
     tracker = store.get_personnel_tracker()
     personnel = tracker.get_all_personnel()
@@ -343,6 +353,11 @@ def cmd_remove_effort(store: ProjectStore, args) -> None:
     if not config_path.exists():
         print(f"Error: Personnel config not found: {config_path}")
         return
+
+    if getattr(args, "start", None):
+        args.start = parse_date_input(args.start)
+    if getattr(args, "end", None):
+        args.end = parse_date_input(args.end)
 
     # Resolve name - could be an index number or actual name
     tracker = store.get_personnel_tracker()
