@@ -35,6 +35,7 @@ from ._read_commands import (
     cmd_project,
     cmd_status,
 )
+from ._setup import cmd_setup
 from ._write_commands import (
     cmd_add_person,
     cmd_add_project,
@@ -631,6 +632,34 @@ def main():
     clear_parser = subparsers.add_parser("clear", help="Clear all projects, personnel, and reports")
     clear_parser.set_defaults(func=cmd_clear)
 
+    # setup command (subcommand group)
+    setup_parser = subparsers.add_parser(
+        "setup", help="Manage smaug environment setup and integrations"
+    )
+    setup_subparsers = setup_parser.add_subparsers(dest="action", required=True)
+
+    # setup mcp
+    setup_mcp = setup_subparsers.add_parser(
+        "mcp", help="Register smaug MCP server with Claude Code and/or Claude Desktop"
+    )
+    setup_mcp.add_argument(
+        "--scope",
+        default="project",
+        choices=["project", "user"],
+        help="Registration scope for Claude Code (default: project)",
+    )
+    setup_mcp.add_argument(
+        "--target",
+        default="all",
+        choices=["all", "code", "desktop"],
+        help="Target client: 'code' (Claude Code), 'desktop' (Claude Desktop), or 'all' (default)",
+    )
+
+    # setup show
+    setup_subparsers.add_parser("show", help="Show current smaug setup status")
+
+    setup_parser.set_defaults(func=cmd_setup)
+
     args = parser.parse_args()
 
     # Resolve data directory through priority chain
@@ -645,7 +674,7 @@ def main():
 
     # Load data
     store = ProjectStore(data_dir=args.data_dir)
-    if args.command not in ("init", "clear"):
+    if args.command not in ("init", "clear", "setup"):
         try:
             store.load_all()
         except FileNotFoundError as e:

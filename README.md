@@ -13,6 +13,143 @@ Smaug helps PIs and lab managers track grant spending, project burn rates, manag
 
 ---
 
+## Quick Start
+
+### Install
+
+Smaug is not published to PyPI. Clone and install it with [uv](https://docs.astral.sh/uv/):
+
+```bash
+git clone https://github.com/noa/smaug.git
+cd smaug
+uv pip install -e ".[mcp]"
+```
+
+This installs the `smaug` CLI, the `smaug-mcp` MCP server, and registers plugin entry points in editable mode.
+
+<details>
+<summary>Alternative install methods</summary>
+
+**pip (editable):**
+```bash
+pip install -e ".[dev,mcp]"
+```
+
+**Directly from GitHub (no clone):**
+```bash
+pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
+# or as a global CLI tool:
+uv tool install git+https://github.com/noa/smaug.git
+```
+</details>
+
+### Initialize a workspace
+
+```bash
+smaug init
+```
+
+This creates a `~/.smaug/` directory with template configuration files.
+
+### Set up the MCP server (optional)
+
+To use Smaug as an MCP tool with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or other MCP-compatible agents, register it:
+
+```bash
+smaug setup mcp
+```
+
+This auto-detects the repository location and registers `smaug-mcp` as a project-scoped MCP server in `.mcp.json`. To register at user scope instead:
+
+```bash
+smaug setup mcp --scope user
+```
+
+<details>
+<summary>Manual MCP registration</summary>
+
+If you prefer to register manually with the Claude CLI:
+```bash
+claude mcp add --scope project smaug -- uv run --directory /path/to/smaug smaug-mcp
+```
+</details>
+
+> [!TIP]
+> Run `smaug setup show` to verify your installation — it checks whether the CLI, MCP dependencies, data directory, and MCP registration are all configured correctly.
+
+### Or try with example data
+
+```bash
+git clone https://github.com/noa/smaug.git
+cd smaug
+smaug --data-dir examples list
+```
+
+### Core commands
+
+```bash
+# List all projects with budget overview
+smaug list
+
+# Detailed status for a project
+smaug status QUASAR
+
+# Project spending over time
+smaug report QUASAR
+
+# Personnel effort across all projects
+smaug personnel
+
+# Monthly spending projections
+smaug project QUASAR --months 12
+
+# Monthly spend plan with what-if scenarios
+smaug spend-plan QUASAR --if "+phd@100%"
+
+# Stop-work date forecast
+smaug stopwork QUASAR --ceiling 450000
+
+# Generate a proposal budget
+smaug proposal --pi "Smith=10%" --phd 2 --travel 5000 --compute 8000
+```
+
+<details>
+<summary>Starting a new project &amp; clearing demo data</summary>
+
+When you initialize a new workspace, Smaug seeds it with demo projects (`QUASAR`, `NEXUS`, `ATLAS`, `STARTUP`) and sample personnel. To track your own grants, clear the demo data first:
+
+```bash
+smaug clear
+```
+
+This prompts for confirmation (`CLEAR`), then resets all config files and deletes demo project directories and reports.
+
+Once clean, add your own project:
+
+```bash
+# Add a sponsored grant
+smaug add-project MYGRANT --type sponsored --budget 750000 --grant "123456"
+
+# Add personnel
+smaug add-person "Smith, John" faculty MYGRANT 15% --salary 120000
+smaug add-person "Doe, Jane" grad_student MYGRANT 50% --salary 48000
+
+# Add travel and expenses
+smaug travel add MYGRANT "IEEE Conference" 2026-10 3200
+smaug expense add MYGRANT "Workstation" 8500 --category Equipment
+
+# Import spending reports
+smaug report import /path/to/monthly_report.pdf
+```
+
+Or use an AI agent one-liner:
+```bash
+claude "Create a new project ATLAS for $1M with two PhD students, then import report.pdf and summarize spending"
+```
+</details>
+
+---
+
 ## Motivation: Why Smaug?
 
 Managing academic research grant budgets is complex and time-consuming. PIs and lab managers must navigate multiple separate institutional systems, compile fragmented PDF/CSV reports, track fringe and indirect cost (F&A) rates, and model personnel effort across projects.
@@ -24,9 +161,7 @@ Smaug was created to address these high-level administration challenges:
 *   **Preventing Common Finance Issues:** Flags common administrative problems such as incorrect or overlapping personnel effort allocations across multiple projects, delayed sponsor invoices, and approaching contractual spending ceilings.
 *   **Cash Flow Estimates for Sponsors:** Generates and exports monthly spending projection models (spend plans) that can be shared with program managers and sponsors as cash flow estimates and stop-work forecasts.
 
-> [!WARNING]
-> **The Principal Investigator's Ultimate Responsibility:**
-> While departmental financial specialists and accountants provide vital administrative assistance, **ultimate responsibility for a grant rests with the Principal Investigator (PI)**. The PI must ensure that expenditures are accurate, spending is on target, and all sponsor terms are met. Financial discrepancies, unmonitored cost overruns, or failures to invoice correctly can have serious institutional and professional implications—including audits, disallowed costs, or immediate sponsor-enforced stop-work orders. Smaug provides PIs with direct visibility into their spending data and forward-looking projections to help manage this responsibility.
+
 
 ---
 
@@ -163,201 +298,6 @@ smaug personnel --anonymize
 - **Invoice validation** — Cross-check sponsor invoices against internal reports
 - **Plugin parsers** — Extensible architecture for institution-specific report formats
 
-## Quick Start
-
-### Install
-
-Since Smaug is a local git repository and not published to PyPI, you can install it using one of the following methods depending on your workflow:
-
-#### Option A: From a cloned local repository (Recommended for Developers/Savvy Users)
-Clone the repository and install it (optionally in editable mode for development and plugin registration):
-
-```bash
-git clone https://github.com/noa/smaug.git
-cd smaug
-
-# Standard install
-pip install .
-# or
-uv pip install .
-
-# Editable install (Recommended for development, testing, or running local agents)
-pip install -e ".[dev,mcp]"
-# or
-uv pip install -e ".[dev,mcp]"
-```
-
-> [!TIP]
-> **Developer & Agentic Editable Installs:**
-> Installing in editable mode (`-e`) ensures that changes to the Python code are immediately live. Crucially, it also registers the custom plugin entry points (e.g. `smaug.parsers`), which are required for custom report parsers to work correctly.
-
-#### Option B: Directly from GitHub (Recommended for general non-dev use)
-If you do not want to clone the codebase and just want to install Smaug as a CLI/MCP tool inside your environment, you can install it directly from GitHub:
-
-```bash
-# Install CLI only
-pip install git+https://github.com/noa/smaug.git
-
-# Install CLI with MCP server support
-pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
-
-# Or using uv tool as a global CLI tool
-uv tool install git+https://github.com/noa/smaug.git
-# With MCP server support:
-uv tool install --with mcp git+https://github.com/noa/smaug.git
-```
-
-### Initialize a new workspace
-
-```bash
-smaug init
-```
-
-This creates a `~/.smaug/` directory with template configuration files.
-
-### Starting a New Project & Clearing Demo Data
-
-When you initialize a new workspace, Smaug seeds it with a set of template files containing demo projects (`QUASAR`, `NEXUS`, `ATLAS`, `STARTUP`) and sample personnel. To track your own grants, you should first clear the demo data to start with a clean slate:
-
-#### 1. Clearing Demo Projects
-
-To remove all demo data and start with a completely fresh workspace, run the following CLI command:
-
-```bash
-smaug clear
-```
-
-This command will prompt you with a warning and require you to type **`CLEAR`** to confirm the action. Once confirmed, it automatically:
-- Resets all configuration files (`manifest.yaml`, `personnel_config.yaml`, `travel_config.yaml`, `purchases_config.yaml`) to clean, empty states.
-- Deletes any project-specific directories (such as `QUASAR/` and `NEXUS/`).
-- Deletes all imported reports and invoices under the `reports/` folder.
-- Commits the purging to Git (if change-tracking is active).
-
-*(Alternatively, you can manually clear out these configurations by resetting the YAML files under `~/.smaug/projects/` to empty lists/objects and deleting the project subdirectories/reports manually.)*
-
-#### 2. Starting a New Project
-
-Once your workspace is clean, you can start a new project in three ways:
-
-##### Option A: Via AI Agent One-Liners
-
-If you are running a coding agent like Claude Code or Google Gemini inside a cloned repository, you can use a single natural language command to set up a project. The agent will attempt to configure the project metadata, set up personnel effort allocations, parse financial PDFs, and display the resulting budget summaries:
-
-```bash
-claude "Create a new project ATLAS for $1M with two PhD students, then import report.pdf and summarize the current spending vs totals"
-```
-
-*Output of the non-interactive agent execution (`claude -p`):*
-```text
-Here's the full picture for ATLAS:
-
----
-
-**Project Setup**
-ATLAS already existed in the demo data with $1M budget and two PhD students (Grad1 and Grad2, both at 100% effort). `report.pdf` was also already imported (September 2025).
-
-**Spending vs. Budget Summary**
-
-| Category | Amount |
-|---|---|
-| Total Budget (Ceiling) | $1,000,000 |
-| **Total Spent** (Sep 2025) | **$200,000** |
-| Committed | $5,000 |
-| Spent + Committed | $205,000 |
-| **Budget Utilized** | **20.8%** |
-| Remaining | $795,000 |
-
-**Category Breakdown (Cumulative)**
-- Salaries & Wages: $80,000
-- Fringe Benefits: $16,000
-- Tuition & Fees: $20,000
-- Health Insurance: $4,000
-- Travel: $8,000
-- Other Expenses: $12,000
-- Indirect Costs (IDC): $60,000
-
-**Burn Rate & Outlook**
-- Monthly burn: ~$12,917 (salary + IDC for the two PhD students)
-- At this rate, the projected 12-month spend is ~$195K, putting the project well within budget — though no end date is set, so stop-work is unconstrained.
-
-**Key note:** The two PhD students account for essentially the entire ongoing burn rate. The $200K already spent includes earlier activity (other personnel like Chen, Wei appear in the report but have no active effort allocation).
-```
-
-> [!TIP]
-> **Skipping Tool Confirmation Prompts in Automation:**
-> When running Claude Code non-interactively in shell scripts via `-p` (or `--print`), you can automate tool approvals cleanly without manual prompts by appending `--permission-mode bypassPermissions` to the command line. This is a much safer, standard alternative to the `--dangerously-skip-permissions` flag and works inside any directory you have authorized via Claude's initial trust prompt.
-
-##### Option B: Via the CLI
-
-1. **Add a sponsored or discretionary project** (this automatically appends it to `manifest.yaml`):
-   ```bash
-   # Add a sponsored grant
-   smaug add-project MYGRANT --type sponsored --budget 750000 --grant "123456"
-
-   # Add an internal discretionary account
-   smaug add-project STARTUP --type discretionary
-   ```
-2. **Add personnel to the project**:
-   ```bash
-   smaug add-person "Smith, John" faculty MYGRANT 15% --salary 120000
-   smaug add-person "Doe, Jane" grad_student MYGRANT 50% --salary 48000
-   ```
-3. **Add planned expenses or travel**:
-   ```bash
-   # Add travel
-   smaug travel add MYGRANT "IEEE Conference" 2026-10 3200
-
-   # Add recurring or one-time purchases
-   smaug expense add MYGRANT "High-Performance Workstation" 8500 --category Equipment
-   ```
-4. **Import spending reports**:
-   When monthly financial reports are issued by your institution, import them to track actual spending:
-   ```bash
-   smaug report import /path/to/monthly_report.pdf
-   ```
-
-##### Option C: By Editing YAML Directly
-
-You can also define your project, personnel, and expenses by editing the YAML configuration files in `~/.smaug/projects/` directly. Ensure you follow the schemas detailed in the [Configuration Reference](docs/configuration.md).
-
-For sponsored projects, you may want to create a project-specific subdirectory (e.g. `~/.smaug/projects/MYGRANT/`) containing a `budget_config.yaml` to define your contractual budget periods.
-
-
-### Or try with example data
-
-```bash
-git clone https://github.com/noa/smaug.git
-cd smaug
-smaug --data-dir examples list
-```
-
-### Core commands
-
-```bash
-# List all projects with budget overview
-smaug list
-
-# Detailed status for a project
-smaug status QUASAR
-
-# Project spending over time
-smaug report QUASAR
-
-# Personnel effort across all projects
-smaug personnel
-
-# Monthly spending projections
-smaug project QUASAR --months 12
-
-# Monthly spend plan with what-if scenarios
-smaug spend-plan QUASAR --if "+phd@100%"
-
-# Stop-work date forecast
-smaug stopwork QUASAR --ceiling 450000
-
-# Generate a proposal budget
-smaug proposal --pi "Smith=10%" --phd 2 --travel 5000 --compute 8000
-```
 
 ## Configuration
 

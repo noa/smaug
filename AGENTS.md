@@ -165,6 +165,11 @@ smaug export QUASAR spend_plan.xlsx
 # Scan & import lockbox invoices
 smaug invoice import /path/to/invoice.pdf
 smaug invoice import /path/to/invoices/ --project QUASAR --force
+
+# Setup and environment configuration
+smaug setup mcp                # Register MCP server with Claude Code (project scope)
+smaug setup mcp --scope user   # Register at user scope
+smaug setup show               # Show installation and setup status
 ```
 
 ## Important conventions
@@ -191,19 +196,15 @@ plan = api.spend_plan(["QUASAR"], add_personnel=[{"type": "phd", "effort_pct": 1
 
 ## MCP Server
 
-Smaug also ships an MCP server for agent tool integration. Since Smaug is a local git repository (not published to PyPI), install it using one of the following methods:
+Smaug ships an MCP server for agent tool integration. The easiest way to register it:
 
-**Method A: From a cloned local repository:**
 ```bash
-pip install -e ".[mcp]"
+smaug setup mcp              # Register with Claude Code (project scope)
+smaug setup mcp --scope user  # Register at user scope
+smaug setup show              # Verify installation status
 ```
 
-**Method B: Directly from GitHub (no repository clone required):**
+Or manually:
 ```bash
-pip install "git+https://github.com/noa/smaug.git#egg=smaug[mcp]"
-```
-
-Then start the MCP server:
-```bash
-smaug-mcp  # Starts MCP server on stdio
+claude mcp add --scope project smaug -- uv run --directory /path/to/smaug smaug-mcp
 ```

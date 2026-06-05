@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "smaug": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/Users/nandrews/smaug-public",
+        "smaug-mcp"
+      ],
+      "env": {}
+    }
+  }
+}
