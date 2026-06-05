@@ -166,11 +166,61 @@ def cmd_set_salary(store: ProjectStore, args) -> None:
             found = False
             for person in config.get("personnel", []):
                 if person["name"] == target_name:
-                    old_salary = person.get("annual_salary", 0)
-                    person["annual_salary"] = salary
                     found = True
-                    print(f"Updated salary: {target_name}")
-                    print(f"  ${old_salary:,} -> ${salary:,}")
+                    target_start = getattr(args, "start", None)
+                    target_end = getattr(args, "end", None)
+
+                    if target_start or target_end:
+                        is_list = isinstance(person.get("annual_salary"), list)
+                        if is_list:
+                            found_exact = False
+                            for record in person["annual_salary"]:
+                                if (
+                                    record.get("start") == target_start
+                                    and record.get("end") == target_end
+                                ):
+                                    old_val = record.get("amount", 0)
+                                    record["amount"] = salary
+                                    found_exact = True
+                                    print(
+                                        f"Updated salary: {target_name} ({target_start or ''} to {target_end or ''})"
+                                    )
+                                    print(f"  ${old_val:,} -> ${salary:,}")
+                                    break
+                            if not found_exact:
+                                new_record = {"amount": salary}
+                                if target_start:
+                                    new_record["start"] = target_start
+                                if target_end:
+                                    new_record["end"] = target_end
+                                person["annual_salary"].append(new_record)
+                                print(
+                                    f"Added scheduled salary: {target_name} (${salary:,}) from {target_start or ''} to {target_end or ''}"
+                                )
+                        else:
+                            old_salary = person.get("annual_salary", 0)
+                            schedule = []
+                            if target_start:
+                                schedule.append({"amount": old_salary, "end": target_start})
+
+                            new_record = {"amount": salary}
+                            if target_start:
+                                new_record["start"] = target_start
+                            if target_end:
+                                new_record["end"] = target_end
+                            schedule.append(new_record)
+                            person["annual_salary"] = schedule
+                            print(
+                                f"Converted salary for {target_name} to schedule: new rate ${salary:,} starting {target_start or ''}"
+                            )
+                    else:
+                        old_salary = person.get("annual_salary", 0)
+                        person["annual_salary"] = salary
+                        print(f"Updated salary: {target_name}")
+                        if isinstance(old_salary, int | float):
+                            print(f"  ${old_salary:,} -> ${salary:,}")
+                        else:
+                            print(f"  [Scheduled] -> ${salary:,}")
                     break
 
             if not found:
@@ -222,24 +272,40 @@ def cmd_set_effort(store: ProjectStore, args) -> None:
                     found_person = True
                     assignments = person.setdefault("assignments", [])
 
-                    # If start/end provided, always add a new assignment (time-bounded)
+                    # If start/end provided, look for an assignment with the same project and exact same start/end dates
                     if args.start or args.end:
-                        new_assignment = {"project": args.project, "effort": effort}
-                        if args.start:
-                            new_assignment["start"] = args.start
-                        if args.end:
-                            new_assignment["end"] = args.end
-                        assignments.append(new_assignment)
-                        date_range = ""
-                        if args.start and args.end:
-                            date_range = f" ({args.start} to {args.end})"
-                        elif args.start:
-                            date_range = f" (from {args.start})"
-                        elif args.end:
-                            date_range = f" (until {args.end})"
-                        print(
-                            f"Added: {target_name} to {args.project} at {effort * 100:.0f}%{date_range}"
-                        )
+                        found_exact = False
+                        for assignment in assignments:
+                            if (
+                                assignment.get("project") == args.project
+                                and assignment.get("start") == args.start
+                                and assignment.get("end") == args.end
+                            ):
+                                old_effort = assignment.get("effort", 0)
+                                assignment["effort"] = effort
+                                found_exact = True
+                                print(
+                                    f"Updated effort: {target_name} on {args.project} ({args.start or ''} to {args.end or ''})"
+                                )
+                                print(f"  {old_effort * 100:.0f}% -> {effort * 100:.0f}%")
+                                break
+                        if not found_exact:
+                            new_assignment = {"project": args.project, "effort": effort}
+                            if args.start:
+                                new_assignment["start"] = args.start
+                            if args.end:
+                                new_assignment["end"] = args.end
+                            assignments.append(new_assignment)
+                            date_range = ""
+                            if args.start and args.end:
+                                date_range = f" ({args.start} to {args.end})"
+                            elif args.start:
+                                date_range = f" (from {args.start})"
+                            elif args.end:
+                                date_range = f" (until {args.end})"
+                            print(
+                                f"Added: {target_name} to {args.project} at {effort * 100:.0f}%{date_range}"
+                            )
                     else:
                         # No dates - look for existing assignment to update
                         found_assignment = False
@@ -304,13 +370,27 @@ def cmd_remove_effort(store: ProjectStore, args) -> None:
                     # Find and remove the assignment
                     for i, assignment in enumerate(assignments):
                         if assignment.get("project") == args.project:
-                            old_effort = assignment.get("effort", 0)
-                            assignments.pop(i)
-                            removed = True
-                            print(
-                                f"Removed: {target_name} from {args.project} (was {old_effort * 100:.0f}%)"
-                            )
-                            break
+                            # Match start and end dates if provided
+                            match_dates = True
+                            target_start = getattr(args, "start", None)
+                            target_end = getattr(args, "end", None)
+
+                            if target_start and assignment.get("start") != target_start:
+                                match_dates = False
+                            if target_end and assignment.get("end") != target_end:
+                                match_dates = False
+
+                            if match_dates:
+                                old_effort = assignment.get("effort", 0)
+                                assignments.pop(i)
+                                removed = True
+                                date_info = ""
+                                if assignment.get("start") or assignment.get("end"):
+                                    date_info = f" ({assignment.get('start') or ''} to {assignment.get('end') or ''})"
+                                print(
+                                    f"Removed: {target_name} from {args.project}{date_info} (was {old_effort * 100:.0f}%)"
+                                )
+                                break
                     break
 
             if not found_person:

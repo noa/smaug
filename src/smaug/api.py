@@ -791,6 +791,43 @@ class SmaugAPI:
         )
         return {"success": True}
 
+    def remove_personnel_effort(
+        self,
+        name: str,
+        project: str,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> dict:
+        """Remove an effort assignment for a person on a project.
+
+        Args:
+            name: Person name (fuzzy matching supported).
+            project: Project short name.
+            start: Optional start date as YYYY-MM.
+            end: Optional end date as YYYY-MM.
+        """
+        from .cli._write_commands import cmd_remove_effort
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        try:
+            cmd_remove_effort(
+                self._get_store(),
+                DummyArgs(
+                    data_dir=self.data_dir,
+                    name=name,
+                    project=project,
+                    start=start,
+                    end=end,
+                ),
+            )
+            return {"success": True}
+        except Exception as e:
+            return {"error": str(e)}
+
     def add_personnel(
         self,
         name: str,
@@ -918,17 +955,30 @@ class SmaugAPI:
                 ptype = item.get("type", "phd")
                 effort = item.get("effort_pct", 100)
                 salary = item.get("salary")
+                start = item.get("start")
+                end = item.get("end")
+                spec = f"+{ptype}@{effort}%"
                 if salary:
-                    hypothetical_specs.append(f"+{ptype}@{effort}%:{salary}")
-                else:
-                    hypothetical_specs.append(f"+{ptype}@{effort}%")
+                    spec += f":{salary}"
+                if start or end:
+                    spec += f"@{start or ''}"
+                    if end:
+                        spec += f":{end}"
+                hypothetical_specs.append(spec)
         if override_effort:
             for item in override_effort:
                 name = item.get("name")
                 real_name = Anonymizer.resolve(name) if name else name
                 effort = item.get("effort_pct", 100)
+                start = item.get("start")
+                end = item.get("end")
                 if real_name:
-                    hypothetical_specs.append(f"{real_name}={effort}%")
+                    spec = f"{real_name}={effort}%"
+                    if start or end:
+                        spec += f"@{start or ''}"
+                        if end:
+                            spec += f":{end}"
+                    hypothetical_specs.append(spec)
 
         # 2. Apply hypotheticals
         rates_config, personnel = load_personnel_config(self._config_path())
@@ -1071,6 +1121,16 @@ class SmaugAPI:
                     "departure": _date_str(person.departure),
                     "assignments": assignments,
                     "total_spent": round(total_spent, 2),
+                    "salaries": [
+                        {
+                            "amount": float(s.amount),
+                            "start": _date_str(s.start),
+                            "end": _date_str(s.end),
+                        }
+                        for s in person.salaries
+                    ]
+                    if person.salaries
+                    else [],
                 }
             )
 
@@ -1346,7 +1406,13 @@ class SmaugAPI:
     # Write: set_salary
     # ------------------------------------------------------------------
 
-    def set_salary(self, name: str, salary: int) -> dict:
+    def set_salary(
+        self,
+        name: str,
+        salary: int,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> dict:
         """Set annual salary for a person."""
         from .cli._write_commands import cmd_set_salary
 
@@ -1357,7 +1423,13 @@ class SmaugAPI:
 
         cmd_set_salary(
             self._get_store(),
-            DummyArgs(data_dir=self.data_dir, name=name, salary=str(salary)),
+            DummyArgs(
+                data_dir=self.data_dir,
+                name=name,
+                salary=str(salary),
+                start=start,
+                end=end,
+            ),
         )
         return {"success": True}
 

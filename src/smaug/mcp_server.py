@@ -511,15 +511,50 @@ def main():
         )
 
     @mcp.tool()
-    def set_salary(name: str, salary: int) -> str:
-        """Update a person's annual salary.
+    def remove_personnel_effort(
+        name: str,
+        project: str,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> str:
+        """Remove a project assignment for a person.
+
+        If start and end dates are specified, removes that specific date-bounded
+        assignment. If not specified, removes the first matching project assignment.
 
         Args:
             name: Personnel name (supports fuzzy/nickname resolution).
-            salary: New annual salary amount.
+            project: Project short name (e.g. 'QUASAR').
+            start: Optional start date as YYYY-MM.
+            end: Optional end date as YYYY-MM.
         """
         api = SmaugAPI(data_dir, anonymize=anonymize)
-        return json.dumps(api.set_salary(name, salary), indent=2)
+        return json.dumps(
+            api.remove_personnel_effort(name, project, start=start, end=end),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def set_salary(
+        name: str,
+        salary: int,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> str:
+        """Update a person's annual salary.
+
+        Without start/end, updates the salary in-place as a flat rate.
+        With start and/or end (YYYY-MM format), creates or updates a date-bounded
+        salary record, allowing scheduling salary updates (e.g. annual raises).
+
+        Args:
+            name: Personnel name (fuzzy matching supported).
+            salary: Annual salary amount in dollars.
+            start: Optional start date as YYYY-MM for the salary change.
+            end: Optional end date as YYYY-MM for the salary change.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_salary(name, salary, start=start, end=end), indent=2)
 
     @mcp.tool()
     def set_assignment_end(name: str, project: str, end_date: str) -> str:

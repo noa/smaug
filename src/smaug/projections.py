@@ -6,7 +6,7 @@ Calculates monthly burn rate and projects spending through specified dates.
 
 import copy
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -40,6 +40,15 @@ class Assignment:
 
 
 @dataclass
+class SalaryRecord:
+    """A salary record with optional start and end dates."""
+
+    amount: Decimal
+    start: date | None = None
+    end: date | None = None
+
+
+@dataclass
 class PersonnelEntry:
     """A person with their salary and project assignments."""
 
@@ -48,6 +57,7 @@ class PersonnelEntry:
     annual_salary: Decimal
     assignments: list[Assignment]
     departure: date | None = None  # Overall end date (leaves university)
+    salaries: list[SalaryRecord] = field(default_factory=list)
 
 
 @dataclass
@@ -85,6 +95,8 @@ class Hypothetical:
     person_type: str = ""  # For additions: phd, postdoc, staff, faculty
     effort: Decimal = Decimal("0")  # Effort percentage (0-1)
     salary: Decimal | None = None  # For non-PhD additions: annual salary
+    start: date | None = None
+    end: date | None = None
 
 
 def parse_hypothetical(spec: str) -> Hypothetical:
@@ -94,6 +106,8 @@ def parse_hypothetical(spec: str) -> Hypothetical:
     - "Name=50%" - Override existing person's effort
     - "+phd@100%" - Add hypothetical PhD student
     - "+postdoc@100%:85000" - Add hypothetical postdoc with salary
+    - "Name=50%@2026-06" - Date-bounded override
+    - "+phd@100%@2026-06:2026-09" - Date-bounded addition
 
     Returns:
         Hypothetical object
@@ -103,13 +117,20 @@ def parse_hypothetical(spec: str) -> Hypothetical:
     """
     spec = spec.strip()
 
-    # Addition pattern: +type@effort%[:salary]
-    add_match = re.match(r"^\+(\w+)@(\d+(?:\.\d+)?)%(?::(\d+))?$", spec)
+    # Addition pattern: +type@effort%[:salary][@start[:end]]
+    add_match = re.match(
+        r"^\+(\w+)@(\d+(?:\.\d+)?)%(?::(\d+))?(?:@([0-9-]+)?(?::([0-9-]+))?)?$", spec
+    )
     if add_match:
         person_type = add_match.group(1).lower()
         effort = Decimal(add_match.group(2)) / 100
         salary_str = add_match.group(3)
         salary = Decimal(salary_str) if salary_str else None
+
+        start_str = add_match.group(4)
+        end_str = add_match.group(5)
+        start = parse_date(start_str) if start_str else None
+        end = parse_date(end_str) if end_str else None
 
         # Normalize type names
         type_map = {
@@ -126,15 +147,30 @@ def parse_hypothetical(spec: str) -> Hypothetical:
             )
 
         return Hypothetical(
-            is_addition=True, person_type=type_map[person_type], effort=effort, salary=salary
+            is_addition=True,
+            person_type=type_map[person_type],
+            effort=effort,
+            salary=salary,
+            start=start,
+            end=end,
         )
 
-    # Override pattern: Name=effort%
-    override_match = re.match(r"^([^=]+)=(\d+(?:\.\d+)?)%$", spec)
+    # Override pattern: Name=effort%[@start[:end]]
+    override_match = re.match(r"^([^=]+)=(\d+(?:\.\d+)?)%(?:@([0-9-]+)?(?::([0-9-]+))?)?$", spec)
     if override_match:
         name = override_match.group(1).strip()
         effort = Decimal(override_match.group(2)) / 100
-        return Hypothetical(is_addition=False, name_pattern=name, effort=effort)
+        start_str = override_match.group(3)
+        end_str = override_match.group(4)
+        start = parse_date(start_str) if start_str else None
+        end = parse_date(end_str) if end_str else None
+        return Hypothetical(
+            is_addition=False,
+            name_pattern=name,
+            effort=effort,
+            start=start,
+            end=end,
+        )
 
     raise ValueError(f"Invalid hypothetical format: '{spec}'. Use 'Name=50%' or '+phd@100%'")
 
@@ -184,8 +220,8 @@ def apply_hypotheticals(
                     Assignment(
                         project=project_id,
                         effort=hypo.effort,
-                        start=None,  # Active indefinitely
-                        end=None,
+                        start=hypo.start,
+                        end=hypo.end,
                     )
                 ],
             )
@@ -211,21 +247,64 @@ def apply_hypotheticals(
                 if (resolved_name and person.name == resolved_name) or (
                     not resolved_name and pattern_lower in name_lower
                 ):
-                    # Find or create assignment for this project
-                    found_assignment = False
-                    for assignment in person.assignments:
-                        if assignment.project == project_id:
-                            assignment.effort = hypo.effort
-                            # Clear end date so hypothetical is active indefinitely
-                            assignment.end = None
-                            found_assignment = True
-                            break
-
-                    if not found_assignment:
-                        # Add new assignment if person wasn't on this project
-                        person.assignments.append(
-                            Assignment(project=project_id, effort=hypo.effort, start=None, end=None)
+                    if hypo.start is None and hypo.end is None:
+                        # Replace all assignments for this project with a single indefinite assignment
+                        new_assignments = [a for a in person.assignments if a.project != project_id]
+                        new_assignments.append(
+                            Assignment(
+                                project=project_id,
+                                effort=hypo.effort,
+                                start=None,
+                                end=None,
+                            )
                         )
+                        person.assignments = new_assignments
+                    else:
+                        # Time-bounded override: split or adjust existing matching assignments
+                        new_assignments = []
+                        h_start = hypo.start
+                        h_end = hypo.end
+
+                        for a in person.assignments:
+                            if a.project != project_id:
+                                new_assignments.append(a)
+                                continue
+
+                            # Split/truncate matching assignments around [h_start, h_end)
+                            # 1. Piece before h_start
+                            if h_start and (a.start is None or a.start < h_start):
+                                new_end = min(a.end, h_start) if a.end else h_start
+                                new_assignments.append(
+                                    Assignment(
+                                        project=a.project,
+                                        effort=a.effort,
+                                        start=a.start,
+                                        end=new_end,
+                                    )
+                                )
+                            # 2. Piece after h_end
+                            if h_end and (a.end is None or h_end < a.end):
+                                new_start = max(a.start, h_end) if a.start else h_end
+                                new_assignments.append(
+                                    Assignment(
+                                        project=a.project,
+                                        effort=a.effort,
+                                        start=new_start,
+                                        end=a.end,
+                                    )
+                                )
+
+                        # Append the override assignment
+                        new_assignments.append(
+                            Assignment(
+                                project=project_id,
+                                effort=hypo.effort,
+                                start=h_start,
+                                end=h_end,
+                            )
+                        )
+                        person.assignments = new_assignments
+
                     matched = True
                     break
 
@@ -320,13 +399,30 @@ def load_personnel_config(config_path: str | Path) -> tuple[Rates, list[Personne
                 )
             )
 
+        raw_salary = p.get("annual_salary", 0)
+        salaries = []
+        if isinstance(raw_salary, list):
+            for s in raw_salary:
+                salaries.append(
+                    SalaryRecord(
+                        amount=Decimal(str(s["amount"])),
+                        start=parse_date(s.get("start")),
+                        end=parse_date(s.get("end")),
+                    )
+                )
+            annual_salary = salaries[-1].amount if salaries else Decimal("0")
+        else:
+            annual_salary = Decimal(str(raw_salary))
+            salaries = [SalaryRecord(amount=annual_salary, start=None, end=None)]
+
         personnel.append(
             PersonnelEntry(
                 name=p["name"],
                 person_type=p["type"],
-                annual_salary=Decimal(str(p["annual_salary"])),
+                annual_salary=annual_salary,
                 assignments=assignments,
                 departure=parse_date(p.get("departure")),
+                salaries=salaries,
             )
         )
 
@@ -441,7 +537,16 @@ def project_monthly_costs(
                 continue
 
             # Monthly salary = annual / 12 * effort
-            monthly_salary = (person.annual_salary / 12) * assignment.effort
+            salary = person.annual_salary
+            if person.salaries:
+                for sr in person.salaries:
+                    if sr.start and date_val < sr.start:
+                        continue
+                    if sr.end and date_val >= sr.end:
+                        continue
+                    salary = sr.amount
+                    break
+            monthly_salary = (salary / 12) * assignment.effort
             direct_salary += monthly_salary
 
             # Fringe based on type

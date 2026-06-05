@@ -159,6 +159,8 @@ def main():
     salary_parser = subparsers.add_parser("set-salary", help="Set annual salary")
     salary_parser.add_argument("name", help="Person name or index number")
     salary_parser.add_argument("salary", help="Annual salary amount")
+    salary_parser.add_argument("--start", help="Start date as YYYY-MM")
+    salary_parser.add_argument("--end", help="End date as YYYY-MM")
     salary_parser.set_defaults(func=cmd_set_salary)
 
     # set-idc command
@@ -218,6 +220,8 @@ def main():
     )
     remove_parser.add_argument("name", help="Person name or index number")
     remove_parser.add_argument("project", help="Project short name")
+    remove_parser.add_argument("--start", help="Start date as YYYY-MM")
+    remove_parser.add_argument("--end", help="End date as YYYY-MM")
     remove_parser.set_defaults(func=cmd_remove_effort)
 
     # alias command

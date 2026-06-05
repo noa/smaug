@@ -268,6 +268,54 @@ class TestWriteCommandsAPI:
         )
         assert res.get("success") is True
 
+    def test_date_bounded_effort_crud(self, temp_api):
+        res = temp_api.set_personnel_effort(
+            "Smith, Jane", "QUASAR", 20.0, start="2026-06", end="2026-09"
+        )
+        assert res.get("success") is True
+
+        res = temp_api.set_personnel_effort(
+            "Smith, Jane", "QUASAR", 30.0, start="2026-06", end="2026-09"
+        )
+        assert res.get("success") is True
+
+        res = temp_api.remove_personnel_effort(
+            "Smith, Jane", "QUASAR", start="2026-06", end="2026-09"
+        )
+        assert res.get("success") is True
+
+    def test_date_bounded_salary_crud(self, temp_api):
+        # 1. Update salary with start date (converts flat salary to schedule)
+        res = temp_api.set_salary("Smith, Jane", 200000, start="2026-07")
+        assert res.get("success") is True
+
+        # 2. Update it again with identical start date to verify in-place update
+        res = temp_api.set_salary("Smith, Jane", 220000, start="2026-07")
+        assert res.get("success") is True
+
+        # Verify spend plan uses old salary ($180,000) in 2026-06 and new salary ($220,000) in 2026-07.
+        # Jane Smith has 10% effort on QUASAR.
+        plan = temp_api.spend_plan(["QUASAR"])
+        proj_06 = next(p for p in plan["projections"] if p["month"] == "2026-06")
+        proj_07 = next(p for p in plan["projections"] if p["month"] == "2026-07")
+
+        # Monthly salary difference should be (220k - 180k) / 12 * 0.10 = 333.33
+        diff = proj_07["salary"] - proj_06["salary"]
+        assert abs(diff - 333.33) < 0.02
+
+        # Verify personnel overview shows salaries list
+        overview = temp_api.personnel_overview()
+        person = next(p for p in overview["personnel"] if "Smith" in p["name"])
+        assert len(person["salaries"]) == 2
+
+        # 3. Add another time-bounded salary segment
+        res = temp_api.set_salary("Smith, Jane", 240000, start="2027-07", end="2028-07")
+        assert res.get("success") is True
+
+        # 4. Overwrite schedule with flat salary
+        res = temp_api.set_salary("Smith, Jane", 185000)
+        assert res.get("success") is True
+
 
 class TestSpendPlanAPI:
     def test_spend_plan_basic(self, api):
@@ -281,6 +329,17 @@ class TestSpendPlanAPI:
             ["QUASAR"],
             add_personnel=[{"type": "phd", "effort_pct": 100, "salary": 45000}],
             override_effort=[{"name": "Smith, Jane", "effort_pct": 50}],
+        )
+        assert "projections" in res
+        assert "totals" in res
+        assert res["project"] == "QUASAR"
+
+    def test_spend_plan_with_date_bounded_hypotheticals(self, api):
+        res = api.spend_plan(
+            ["QUASAR"],
+            override_effort=[
+                {"name": "Smith, Jane", "effort_pct": 50, "start": "2026-06", "end": "2026-09"}
+            ],
         )
         assert "projections" in res
         assert "totals" in res
