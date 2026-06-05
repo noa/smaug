@@ -752,8 +752,25 @@ class SmaugAPI:
             return {"error": err}
         return {"success": True, "title": title}
 
-    def set_personnel_effort(self, name: str, project: str, effort_pct: float) -> dict:
-        """Set effort for a person on a project."""
+    def set_personnel_effort(
+        self,
+        name: str,
+        project: str,
+        effort_pct: float,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> dict:
+        """Set effort for a person on a project.
+
+        Args:
+            name: Person name (fuzzy matching supported).
+            project: Project short name.
+            effort_pct: Effort as percentage (e.g. 25 for 25%).
+            start: Optional start date as YYYY-MM. When provided with end,
+                creates a new date-bounded assignment instead of modifying
+                the existing one.
+            end: Optional end date as YYYY-MM.
+        """
         from .cli._write_commands import cmd_set_effort
 
         class DummyArgs:
@@ -768,8 +785,8 @@ class SmaugAPI:
                 name=name,
                 project=project,
                 effort=str(effort_pct),
-                start=None,
-                end=None,
+                start=start,
+                end=end,
             ),
         )
         return {"success": True}

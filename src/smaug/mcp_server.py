@@ -436,16 +436,35 @@ def main():
     # ------------------------------------------------------------------
 
     @mcp.tool()
-    def set_personnel_effort(name: str, project: str, effort_pct: float) -> str:
+    def set_personnel_effort(
+        name: str,
+        project: str,
+        effort_pct: float,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> str:
         """Set or update effort allocation for a person on a project.
+
+        Without start/end, updates the existing effort in-place.
+        With start and/or end (YYYY-MM format), creates a new date-bounded
+        assignment — useful for temporary changes like internship leave,
+        sabbaticals, or phased effort ramp-ups.
+
+        Example: To mark someone as 0% from June to September for an
+        internship, call with effort_pct=0, start="2026-06", end="2026-09".
 
         Args:
             name: Personnel name (supports fuzzy/nickname resolution).
             project: Project short name (e.g. 'QUASAR').
             effort_pct: Effort level as a percentage (e.g. 25 for 25%).
+            start: Optional start date as YYYY-MM for date-bounded assignment.
+            end: Optional end date as YYYY-MM for date-bounded assignment.
         """
         api = SmaugAPI(data_dir, anonymize=anonymize)
-        return json.dumps(api.set_personnel_effort(name, project, effort_pct), indent=2)
+        return json.dumps(
+            api.set_personnel_effort(name, project, effort_pct, start=start, end=end),
+            indent=2,
+        )
 
     @mcp.tool()
     def add_personnel(
