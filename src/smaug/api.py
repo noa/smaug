@@ -1007,3 +1007,394 @@ class SmaugAPI:
             "projections": proj_list,
             "totals": {k: round(v, 2) for k, v in totals.items()},
         }
+
+    # ------------------------------------------------------------------
+    # Personnel overview
+    # ------------------------------------------------------------------
+
+    def personnel_overview(self, project: str | None = None) -> dict:
+        """Return personnel effort allocations and spending.
+
+        Args:
+            project: Optional project filter.
+        """
+        from .cli._util import Anonymizer
+        from .projections import load_personnel_config
+
+        store = self._get_store()
+        tracker = store.get_personnel_tracker()
+        config_path = self._config_path()
+
+        personnel_list: list[dict] = []
+
+        if not config_path.exists():
+            return {"error": f"Personnel config not found: {config_path}"}
+
+        _, config_personnel = load_personnel_config(config_path)
+
+        for person in config_personnel:
+            assignments = []
+            has_matching_project = False
+            for a in person.assignments:
+                if project and a.project != project:
+                    continue
+                has_matching_project = True
+                assignments.append(
+                    {
+                        "project": a.project,
+                        "effort": float(a.effort),
+                        "start": _date_str(a.start),
+                        "end": _date_str(a.end),
+                    }
+                )
+
+            if project and not has_matching_project:
+                continue
+
+            # Spending from reports
+            by_project = tracker.get_person_by_project(person.name)
+            if project:
+                total_spent = float(by_project.get(project, Decimal("0")))
+            else:
+                total_spent = float(sum(by_project.values(), Decimal("0")))
+
+            total_effort: float = sum(
+                float(a.effort) for a in person.assignments if not project or a.project == project
+            )
+
+            personnel_list.append(
+                {
+                    "name": Anonymizer.anonymize(person.name),
+                    "type": person.person_type,
+                    "annual_salary": float(person.annual_salary),
+                    "total_effort": round(total_effort, 4),
+                    "departure": _date_str(person.departure),
+                    "assignments": assignments,
+                    "total_spent": round(total_spent, 2),
+                }
+            )
+
+        return {
+            "personnel": personnel_list,
+            "count": len(personnel_list),
+            "filter_project": project,
+        }
+
+    # ------------------------------------------------------------------
+    # Funding summary
+    # ------------------------------------------------------------------
+
+    def funding_summary(self, fy: int | None = None) -> dict:
+        """Aggregate spending across all sponsored projects.
+
+        Args:
+            fy: Fiscal year (e.g. 2026 = Jul 2025 - Jun 2026).
+        """
+        from .projections import load_personnel_config, project_monthly_costs
+
+        store = self._get_store()
+        config_path = self._config_path()
+
+        if not config_path.exists():
+            return {"error": f"Personnel config not found: {config_path}"}
+
+        rates, personnel = load_personnel_config(config_path)
+        store.load_travel_config()
+        store.load_purchases_config()
+
+        today = date.today()
+        if fy:
+            range_start = date(fy - 1, 7, 1)
+            range_end = date(fy, 6, 1)
+            range_label = f"FY {fy} (Jul {fy - 1} - Jun {fy})"
+        else:
+            range_start = date(today.year, 1, 1)
+            range_end = date(today.year, 12, 1)
+            range_label = f"{range_start.strftime('%b %Y')} - {range_end.strftime('%b %Y')}"
+
+        # Collect sponsored projects
+        sponsored = []
+        for pid in store.list_projects():
+            data = store.get_project(pid)
+            if data and data.project.project_type.value == "sponsored":
+                sponsored.append((pid, data))
+
+        if not sponsored:
+            return {
+                "range_label": range_label,
+                "projects": [],
+                "grand_actual": 0,
+                "grand_projected": 0,
+                "grand_total": 0,
+            }
+
+        def _build_actuals(data, rs: date) -> dict[tuple[int, int], Decimal]:
+            reports = sorted(data.spending, key=lambda r: (r.year, r.month))
+            actuals: dict[tuple[int, int], Decimal] = {}
+            baseline = Decimal("0")
+            for r in reports:
+                if date(r.year, r.month, 1) < rs:
+                    baseline = r.total_spent
+            prev = baseline
+            for r in reports:
+                if date(r.year, r.month, 1) < rs:
+                    continue
+                actuals[(r.year, r.month)] = r.total_spent - prev
+                prev = r.total_spent
+            return actuals
+
+        rows = []
+        grand_actual = Decimal("0")
+        grand_projected = Decimal("0")
+
+        current_month = today.replace(day=1)
+
+        for pid, data in sponsored:
+            actuals = _build_actuals(data, range_start)
+            travel_items = store.get_project_travel(pid)
+            expense_items = store.get_project_expenses(pid)
+
+            proj_actual = Decimal("0")
+            proj_projected = Decimal("0")
+
+            cur = date(range_start.year, range_start.month, 1)
+            while cur <= range_end:
+                key = (cur.year, cur.month)
+                if key in actuals:
+                    proj_actual += actuals[key]
+                elif cur >= current_month:
+                    mp = project_monthly_costs(
+                        pid,
+                        rates,
+                        personnel,
+                        cur.year,
+                        cur.month,
+                        travel_items,
+                        expense_items,
+                    )
+                    proj_projected += mp.total
+                if cur.month == 12:
+                    cur = cur.replace(year=cur.year + 1, month=1)
+                else:
+                    cur = cur.replace(month=cur.month + 1)
+
+            total = proj_actual + proj_projected
+            rows.append(
+                {
+                    "id": pid,
+                    "actual": round(float(proj_actual), 2),
+                    "projected": round(float(proj_projected), 2),
+                    "total": round(float(total), 2),
+                }
+            )
+            grand_actual += proj_actual
+            grand_projected += proj_projected
+
+        rows.sort(key=lambda r: float(str(r["total"])), reverse=True)
+
+        return {
+            "range_label": range_label,
+            "projects": rows,
+            "grand_actual": round(float(grand_actual), 2),
+            "grand_projected": round(float(grand_projected), 2),
+            "grand_total": round(float(grand_actual + grand_projected), 2),
+        }
+
+    # ------------------------------------------------------------------
+    # Budget vs actuals
+    # ------------------------------------------------------------------
+
+    def budget_vs_actuals(self, project: str) -> dict:
+        """Compare projected spending against contractual budget ceilings."""
+        from .contractual_budget import load_contractual_budget
+        from .projections import load_personnel_config, project_monthly_costs
+
+        store = self._get_store()
+        data = store.get_project(project)
+        if not data:
+            return {"error": f"Project not found: {project}"}
+
+        budget_config_path = None
+        if data.project.budget_dir:
+            budget_config_path = Path(data.project.budget_dir) / "budget_config.yaml"
+
+        if not budget_config_path or not budget_config_path.exists():
+            return {"error": f"No contractual budget config found for {project}"}
+
+        contract = load_contractual_budget(budget_config_path)
+        if not contract:
+            return {"error": f"Could not parse budget config: {budget_config_path}"}
+
+        config_path = self._config_path()
+        rates = None
+        personnel: list = []
+        if config_path.exists():
+            rates, personnel = load_personnel_config(config_path)
+
+        today = date.today()
+
+        periods_out = []
+        total_budget = Decimal("0")
+        total_actual = Decimal("0")
+        total_projected = Decimal("0")
+
+        for period in sorted(contract.periods, key=lambda p: p.year_num):
+            budget_amt = period.total
+            total_budget += budget_amt
+
+            is_past = period.end < today
+            is_current = period.start <= today <= period.end
+            is_future = period.start > today
+
+            actual_amt = Decimal("0")
+            projected_amt = Decimal("0")
+
+            if is_past or is_current:
+                period_reports = [
+                    r
+                    for r in data.spending
+                    if period.start <= date(r.year, r.month, 1) <= period.end
+                ]
+                if period_reports:
+                    latest = max(period_reports, key=lambda r: (r.year, r.month))
+                    earliest = min(period_reports, key=lambda r: (r.year, r.month))
+
+                    if period.year_num == 1:
+                        actual_amt = latest.total_spent
+                    else:
+                        prior_period = contract.get_period_by_year(period.year_num - 1)
+                        prior_ending = Decimal("0")
+                        if prior_period:
+                            prior_reports = [
+                                r
+                                for r in data.spending
+                                if prior_period.start
+                                <= date(r.year, r.month, 1)
+                                <= prior_period.end
+                            ]
+                            if prior_reports:
+                                prior_latest = max(prior_reports, key=lambda r: (r.year, r.month))
+                                prior_ending = prior_latest.total_spent
+                            else:
+                                prior_ending = earliest.total_spent
+                        actual_amt = latest.total_spent - prior_ending
+
+            if (is_current or is_future) and rates and personnel:
+                proj_start = today.replace(day=1) if is_current else period.start
+                cur = proj_start
+                while cur <= period.end:
+                    proj = project_monthly_costs(project, rates, personnel, cur.year, cur.month)
+                    projected_amt += proj.total
+                    if cur.month == 12:
+                        cur = cur.replace(year=cur.year + 1, month=1)
+                    else:
+                        cur = cur.replace(month=cur.month + 1)
+
+            total_actual += actual_amt
+            total_projected += projected_amt
+
+            variance = budget_amt - actual_amt - projected_amt
+            underspend_threshold = budget_amt * Decimal("0.25")
+
+            if is_past:
+                if variance > underspend_threshold:
+                    status = "underspend"
+                elif variance >= 0:
+                    status = "under"
+                else:
+                    status = "overspend"
+            elif is_current:
+                if variance > underspend_threshold:
+                    status = "underspend"
+                elif variance >= budget_amt * Decimal("0.05"):
+                    status = "on_track"
+                elif variance >= 0:
+                    status = "tight"
+                else:
+                    status = "overspend"
+            else:
+                if variance > underspend_threshold:
+                    status = "underspend"
+                elif variance >= 0:
+                    status = "planned"
+                else:
+                    status = "overspend"
+
+            periods_out.append(
+                {
+                    "year_num": period.year_num,
+                    "dates": f"{period.start.strftime('%b %Y')} - {period.end.strftime('%b %Y')}",
+                    "budget": round(float(budget_amt), 2),
+                    "actual": round(float(actual_amt), 2),
+                    "projected": round(float(projected_amt), 2),
+                    "variance": round(float(variance), 2),
+                    "status": status,
+                }
+            )
+
+        return {
+            "project": project,
+            "award_id": contract.award_id,
+            "total_budget": round(float(total_budget), 2),
+            "periods": periods_out,
+            "total_actual": round(float(total_actual), 2),
+            "total_projected": round(float(total_projected), 2),
+            "total_variance": round(float(total_budget - total_actual - total_projected), 2),
+        }
+
+    # ------------------------------------------------------------------
+    # Write: set_salary
+    # ------------------------------------------------------------------
+
+    def set_salary(self, name: str, salary: int) -> dict:
+        """Set annual salary for a person."""
+        from .cli._write_commands import cmd_set_salary
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        cmd_set_salary(
+            self._get_store(),
+            DummyArgs(data_dir=self.data_dir, name=name, salary=str(salary)),
+        )
+        return {"success": True}
+
+    # ------------------------------------------------------------------
+    # Write: set_assignment_end
+    # ------------------------------------------------------------------
+
+    def set_assignment_end(self, name: str, project: str, end_date: str) -> dict:
+        """Set or clear end date for a person's project assignment."""
+        from .cli._write_commands import cmd_set_end
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        cmd_set_end(
+            self._get_store(),
+            DummyArgs(data_dir=self.data_dir, name=name, project=project, date=end_date),
+        )
+        return {"success": True}
+
+    # ------------------------------------------------------------------
+    # Write: set_departure
+    # ------------------------------------------------------------------
+
+    def set_departure(self, name: str, departure_date: str) -> dict:
+        """Set departure date for a person (leaves university/graduates)."""
+        from .cli._write_commands import cmd_set_departure
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        cmd_set_departure(
+            self._get_store(),
+            DummyArgs(data_dir=self.data_dir, name=name, date=departure_date),
+        )
+        return {"success": True}

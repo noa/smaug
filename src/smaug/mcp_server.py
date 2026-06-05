@@ -294,6 +294,50 @@ def main():
         return json.dumps(calendar_data, indent=2)
 
     # ------------------------------------------------------------------
+    # Personnel, Summary & Budget vs Actuals Tools
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    def personnel_overview(project: str | None = None) -> str:
+        """Show personnel effort allocations across all projects.
+
+        Returns each person's salary, effort assignments, and cumulative
+        spending from reports. Optionally filter by project.
+
+        Args:
+            project: Optional project short name to filter by.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.personnel_overview(project=project), indent=2)
+
+    @mcp.tool()
+    def funding_summary(fy: int | None = None) -> str:
+        """Aggregate spending summary across all sponsored projects.
+
+        Shows actual spending (from reports) and projected spending for each
+        project over a fiscal year or calendar year.
+
+        Args:
+            fy: Fiscal year (e.g. 2026 = Jul 2025 - Jun 2026). Defaults to current calendar year.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.funding_summary(fy=fy), indent=2)
+
+    @mcp.tool()
+    def budget_vs_actuals(project: str) -> str:
+        """Compare projected spending against contractual budget ceilings.
+
+        Shows actual vs budgeted amounts for each contract year, with
+        variance analysis and status indicators (under, on_track, tight,
+        overspend, underspend, planned).
+
+        Args:
+            project: Project short name.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.budget_vs_actuals(project), indent=2)
+
+    # ------------------------------------------------------------------
     # Import Tools
     # ------------------------------------------------------------------
 
@@ -465,6 +509,43 @@ def main():
             api.set_personnel_effort(name, project, effort_pct, start=start, end=end),
             indent=2,
         )
+
+    @mcp.tool()
+    def set_salary(name: str, salary: int) -> str:
+        """Update a person's annual salary.
+
+        Args:
+            name: Personnel name (supports fuzzy/nickname resolution).
+            salary: New annual salary amount.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_salary(name, salary), indent=2)
+
+    @mcp.tool()
+    def set_assignment_end(name: str, project: str, end_date: str) -> str:
+        """Set or clear the end date for a person's project assignment.
+
+        Args:
+            name: Personnel name (supports fuzzy/nickname resolution).
+            project: Project short name.
+            end_date: End date as YYYY-MM, or 'none' to clear.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_assignment_end(name, project, end_date), indent=2)
+
+    @mcp.tool()
+    def set_departure(name: str, departure_date: str) -> str:
+        """Set departure date for a person (graduating, leaving university).
+
+        This overrides all project assignment end dates — the person stops
+        appearing in projections after this date.
+
+        Args:
+            name: Personnel name (supports fuzzy/nickname resolution).
+            departure_date: Departure date as YYYY-MM.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_departure(name, departure_date), indent=2)
 
     @mcp.tool()
     def add_personnel(
