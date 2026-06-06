@@ -104,3 +104,83 @@ class TestPersonnelTracker:
         assert len(warnings) == 1
         assert warnings[0].warning_type == "employee_type_mismatch"
         assert warnings[0].person_name == "Confused, Chris"
+
+
+def test_resolve_assignment_overlaps():
+    from datetime import date
+
+    from smaug.projections import Assignment, resolve_assignment_overlaps
+
+    # 1. Non-overlapping assignments
+    a1 = Assignment(
+        project="PROJ_A", effort=Decimal("0.1"), start=date(2026, 1, 1), end=date(2026, 6, 1)
+    )
+    a2 = Assignment(
+        project="PROJ_A", effort=Decimal("0.2"), start=date(2026, 6, 1), end=date(2026, 12, 1)
+    )
+    res = resolve_assignment_overlaps([a1, a2])
+    assert len(res) == 2
+    assert res[0] == a1
+    assert res[1] == a2
+
+    # 2. Overlapping assignments: a2 overriding a1 in the middle
+    a1 = Assignment(
+        project="PROJ_A", effort=Decimal("0.1"), start=date(2026, 1, 1), end=date(2026, 12, 1)
+    )
+    a2 = Assignment(
+        project="PROJ_A", effort=Decimal("0.5"), start=date(2026, 6, 1), end=date(2026, 9, 1)
+    )
+    res = resolve_assignment_overlaps([a1, a2])
+    assert len(res) == 3
+    # First piece of a1
+    assert res[0].project == "PROJ_A"
+    assert res[0].effort == Decimal("0.1")
+    assert res[0].start == date(2026, 1, 1)
+    assert res[0].end == date(2026, 6, 1)
+    # Second piece of a1
+    assert res[1].project == "PROJ_A"
+    assert res[1].effort == Decimal("0.1")
+    assert res[1].start == date(2026, 9, 1)
+    assert res[1].end == date(2026, 12, 1)
+    # Override
+    assert res[2] == a2
+
+    # 3. Overlapping assignments on different projects (should not affect each other)
+    a1 = Assignment(
+        project="PROJ_A", effort=Decimal("0.1"), start=date(2026, 1, 1), end=date(2026, 12, 1)
+    )
+    a2 = Assignment(
+        project="PROJ_B", effort=Decimal("0.5"), start=date(2026, 6, 1), end=date(2026, 9, 1)
+    )
+    res = resolve_assignment_overlaps([a1, a2])
+    assert len(res) == 2
+    assert res[0] == a1
+    assert res[1] == a2
+
+    # 4. Zero effort override
+    a1 = Assignment(
+        project="PROJ_A", effort=Decimal("0.1"), start=date(2026, 1, 1), end=date(2026, 12, 1)
+    )
+    a2 = Assignment(
+        project="PROJ_A", effort=Decimal("0.0"), start=date(2026, 6, 1), end=date(2026, 9, 1)
+    )
+    res = resolve_assignment_overlaps([a1, a2])
+    assert len(res) == 3
+    assert res[0].effort == Decimal("0.1")
+    assert res[0].end == date(2026, 6, 1)
+    assert res[1].effort == Decimal("0.1")
+    assert res[1].start == date(2026, 9, 1)
+    assert res[2].effort == Decimal("0.0")
+
+    # 5. Indefinite assignment override
+    a1 = Assignment(project="PROJ_A", effort=Decimal("0.1"))
+    a2 = Assignment(
+        project="PROJ_A", effort=Decimal("0.5"), start=date(2026, 6, 1), end=date(2026, 9, 1)
+    )
+    res = resolve_assignment_overlaps([a1, a2])
+    assert len(res) == 3
+    assert res[0].start is None
+    assert res[0].end == date(2026, 6, 1)
+    assert res[1].start == date(2026, 9, 1)
+    assert res[1].end is None
+    assert res[2] == a2

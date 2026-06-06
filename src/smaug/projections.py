@@ -322,6 +322,42 @@ def parse_date(date_str: str | None) -> date | None:
     return date(int(parts[0]), int(parts[1]), 1)
 
 
+def resolve_assignment_overlaps(assignments: list[Assignment]) -> list[Assignment]:
+    """Resolve overlapping assignments for the same project.
+
+    Later assignments in the list (newer overrides) split/truncate earlier ones.
+    """
+    resolved: list[Assignment] = []
+    for cur in assignments:
+        new_resolved = []
+        h_start, h_end, project_id = cur.start, cur.end, cur.project
+        for a in resolved:
+            if a.project != project_id:
+                new_resolved.append(a)
+                continue
+
+            # If the current assignment is completely indefinite (start and end are None),
+            # it replaces everything before it on this project entirely.
+            if h_start is None and h_end is None:
+                continue
+
+            # 1. Piece before h_start
+            if h_start and (a.start is None or a.start < h_start):
+                new_end = min(a.end, h_start) if a.end else h_start
+                if a.start is None or a.start < new_end:
+                    new_resolved.append(Assignment(a.project, a.effort, a.start, new_end))
+
+            # 2. Piece after h_end
+            if h_end and (a.end is None or h_end < a.end):
+                new_start = max(a.start, h_end) if a.start else h_end
+                if a.end is None or new_start < a.end:
+                    new_resolved.append(Assignment(a.project, a.effort, new_start, a.end))
+
+        new_resolved.append(cur)
+        resolved = new_resolved
+    return resolved
+
+
 def load_personnel_config(config_path: str | Path) -> tuple[Rates, list[PersonnelEntry]]:
     """
     Load personnel configuration from YAML.
@@ -420,7 +456,7 @@ def load_personnel_config(config_path: str | Path) -> tuple[Rates, list[Personne
                 name=p["name"],
                 person_type=p["type"],
                 annual_salary=annual_salary,
-                assignments=assignments,
+                assignments=resolve_assignment_overlaps(assignments),
                 departure=parse_date(p.get("departure")),
                 salaries=salaries,
             )
