@@ -778,18 +778,27 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        cmd_set_effort(
-            self._get_store(),
-            DummyArgs(
-                data_dir=self.data_dir,
-                name=name,
-                project=project,
-                effort=str(effort_pct),
-                start=start,
-                end=end,
-            ),
-        )
-        return {"success": True}
+        try:
+            cmd_set_effort(
+                self._get_store(),
+                DummyArgs(
+                    data_dir=self.data_dir,
+                    name=name,
+                    project=project,
+                    effort=str(effort_pct),
+                    start=start,
+                    end=end,
+                ),
+            )
+            self._store = None  # Invalidate cache so reads reflect the write
+            return {
+                "success": True,
+                "name": name,
+                "project": project,
+                "effort_pct": effort_pct,
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
     def remove_personnel_effort(
         self,
@@ -824,7 +833,8 @@ class SmaugAPI:
                     end=end,
                 ),
             )
-            return {"success": True}
+            self._store = None  # Invalidate cache so reads reflect the write
+            return {"success": True, "name": name, "project": project}
         except Exception as e:
             return {"error": str(e)}
 
@@ -844,20 +854,30 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        cmd_add_person(
-            self._get_store(),
-            DummyArgs(
-                data_dir=self.data_dir,
-                name=name,
-                type=person_type,
-                project=project,
-                effort=str(effort_pct),
-                salary=str(salary) if salary else None,
-                start=None,
-                end=None,
-            ),
-        )
-        return {"success": True}
+        try:
+            cmd_add_person(
+                self._get_store(),
+                DummyArgs(
+                    data_dir=self.data_dir,
+                    name=name,
+                    type=person_type,
+                    project=project,
+                    effort=str(effort_pct),
+                    salary=str(salary) if salary else None,
+                    start=None,
+                    end=None,
+                ),
+            )
+            self._store = None  # Invalidate cache so reads reflect the write
+            return {
+                "success": True,
+                "name": name,
+                "type": person_type,
+                "project": project,
+                "effort_pct": effort_pct,
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
     def add_travel_item(
         self,
@@ -875,19 +895,23 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        cmd_travel(
-            self._get_store(),
-            DummyArgs(
-                data_dir=self.data_dir,
-                action="add",
-                project=project,
-                description=description,
-                date=date_str,
-                amount=str(amount),
-                traveler=traveler,
-            ),
-        )
-        return {"success": True}
+        try:
+            cmd_travel(
+                self._get_store(),
+                DummyArgs(
+                    data_dir=self.data_dir,
+                    action="add",
+                    project=project,
+                    description=description,
+                    date=date_str,
+                    amount=str(amount),
+                    traveler=traveler,
+                ),
+            )
+            self._store = None  # Invalidate cache so reads reflect the write
+            return {"success": True, "project": project, "description": description}
+        except Exception as e:
+            return {"error": str(e)}
 
     def add_expense_item(
         self,
@@ -907,21 +931,25 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        cmd_expense(
-            self._get_store(),
-            DummyArgs(
-                data_dir=self.data_dir,
-                action="add",
-                project=project,
-                description=description,
-                amount=str(amount),
-                category=category,
-                date=date_str,
-                start=start_str,
-                end=end_str,
-            ),
-        )
-        return {"success": True}
+        try:
+            cmd_expense(
+                self._get_store(),
+                DummyArgs(
+                    data_dir=self.data_dir,
+                    action="add",
+                    project=project,
+                    description=description,
+                    amount=str(amount),
+                    category=category,
+                    date=date_str,
+                    start=start_str,
+                    end=end_str,
+                ),
+            )
+            self._store = None  # Invalidate cache so reads reflect the write
+            return {"success": True, "project": project, "description": description}
+        except Exception as e:
+            return {"error": str(e)}
 
     def spend_plan(
         self,
@@ -1421,17 +1449,21 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        cmd_set_salary(
-            self._get_store(),
-            DummyArgs(
-                data_dir=self.data_dir,
-                name=name,
-                salary=str(salary),
-                start=start,
-                end=end,
-            ),
-        )
-        return {"success": True}
+        try:
+            cmd_set_salary(
+                self._get_store(),
+                DummyArgs(
+                    data_dir=self.data_dir,
+                    name=name,
+                    salary=str(salary),
+                    start=start,
+                    end=end,
+                ),
+            )
+            self._store = None  # Invalidate cache so reads reflect the write
+            return {"success": True, "name": name, "salary": salary}
+        except Exception as e:
+            return {"error": str(e)}
 
     # ------------------------------------------------------------------
     # Write: set_assignment_end
@@ -1446,11 +1478,15 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        cmd_set_end(
-            self._get_store(),
-            DummyArgs(data_dir=self.data_dir, name=name, project=project, date=end_date),
-        )
-        return {"success": True}
+        try:
+            cmd_set_end(
+                self._get_store(),
+                DummyArgs(data_dir=self.data_dir, name=name, project=project, date=end_date),
+            )
+            self._store = None  # Invalidate cache so reads reflect the write
+            return {"success": True, "name": name, "project": project, "end_date": end_date}
+        except Exception as e:
+            return {"error": str(e)}
 
     # ------------------------------------------------------------------
     # Write: set_departure
@@ -1465,8 +1501,12 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        cmd_set_departure(
-            self._get_store(),
-            DummyArgs(data_dir=self.data_dir, name=name, date=departure_date),
-        )
-        return {"success": True}
+        try:
+            cmd_set_departure(
+                self._get_store(),
+                DummyArgs(data_dir=self.data_dir, name=name, date=departure_date),
+            )
+            self._store = None  # Invalidate cache so reads reflect the write
+            return {"success": True, "name": name, "departure_date": departure_date}
+        except Exception as e:
+            return {"error": str(e)}

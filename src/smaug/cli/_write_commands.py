@@ -19,8 +19,7 @@ def cmd_set_end(store: ProjectStore, args) -> None:
     config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
 
     if not config_path.exists():
-        print(f"Error: Personnel config not found: {config_path}")
-        return
+        raise ValueError(f"Personnel config not found: {config_path}")
 
     # Resolve name - could be an index number or actual name
     tracker = store.get_personnel_tracker()
@@ -29,8 +28,7 @@ def cmd_set_end(store: ProjectStore, args) -> None:
     target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
     if error:
-        print(f"Error: {error}")
-        return
+        raise ValueError(error)
 
     if target_name != args.name:
         print(f"Resolved '{args.name}' to: {target_name}")
@@ -68,9 +66,8 @@ def cmd_set_end(store: ProjectStore, args) -> None:
 
             if not found:
                 raise ValueError(f"Person '{target_name}' not found in config")
-    except ValueError as e:
-        print(f"Error: {e}")
-        return
+    except ValueError:
+        raise
 
     print(f"Config saved to {config_path}")
     git_commit_change(args.data_dir, f"set-end: {target_name} on {args.project} -> {args.date}")
@@ -84,8 +81,7 @@ def cmd_set_departure(store: ProjectStore, args) -> None:
     config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
 
     if not config_path.exists():
-        print(f"Error: Personnel config not found: {config_path}")
-        return
+        raise ValueError(f"Personnel config not found: {config_path}")
 
     # Resolve name - could be an index number or actual name
     tracker = store.get_personnel_tracker()
@@ -94,8 +90,7 @@ def cmd_set_departure(store: ProjectStore, args) -> None:
     target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
     if error:
-        print(f"Error: {error}")
-        return
+        raise ValueError(error)
 
     if target_name != args.name:
         print(f"Resolved '{args.name}' to: {target_name}")
@@ -113,9 +108,8 @@ def cmd_set_departure(store: ProjectStore, args) -> None:
 
             if not found:
                 raise ValueError(f"Person '{target_name}' not found in config")
-    except ValueError as e:
-        print(f"Error: {e}")
-        return
+    except ValueError:
+        raise
 
     print(f"Config saved to {config_path}")
     git_commit_change(args.data_dir, f"set-departure: {target_name} -> {args.date}")
@@ -126,8 +120,7 @@ def cmd_set_salary(store: ProjectStore, args) -> None:
     config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
 
     if not config_path.exists():
-        print(f"Error: Personnel config not found: {config_path}")
-        return
+        raise ValueError(f"Personnel config not found: {config_path}")
 
     if getattr(args, "start", None):
         args.start = parse_date_input(args.start)
@@ -138,8 +131,7 @@ def cmd_set_salary(store: ProjectStore, args) -> None:
     try:
         salary = int(args.salary)
     except ValueError:
-        print(f"Error: Invalid salary amount: {args.salary}")
-        return
+        raise ValueError(f"Invalid salary amount: {args.salary}") from None
 
     try:
         with yaml_transaction(config_path) as config:
@@ -230,9 +222,8 @@ def cmd_set_salary(store: ProjectStore, args) -> None:
 
             if not found:
                 raise ValueError(f"Person '{target_name}' not found in config")
-    except ValueError as e:
-        print(f"Error: {e}")
-        return
+    except ValueError:
+        raise
 
     print(f"Config saved to {config_path}")
     git_commit_change(args.data_dir, f"set-salary: {target_name} -> ${salary:,}")
@@ -243,8 +234,7 @@ def cmd_set_effort(store: ProjectStore, args) -> None:
     config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
 
     if not config_path.exists():
-        print(f"Error: Personnel config not found: {config_path}")
-        return
+        raise ValueError(f"Personnel config not found: {config_path}")
 
     if getattr(args, "start", None):
         args.start = parse_date_input(args.start)
@@ -258,8 +248,7 @@ def cmd_set_effort(store: ProjectStore, args) -> None:
     target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
     if error:
-        print(f"Error: {error}")
-        return
+        raise ValueError(error)
 
     if target_name != args.name:
         print(f"Resolved '{args.name}' to: {target_name}")
@@ -270,8 +259,7 @@ def cmd_set_effort(store: ProjectStore, args) -> None:
         if effort > 1:
             effort = effort / 100  # Convert percentage to decimal
     except ValueError:
-        print(f"Error: Invalid effort value: {args.effort}")
-        return
+        raise ValueError(f"Invalid effort value: {args.effort}") from None
 
     try:
         with yaml_transaction(config_path) as config:
@@ -336,9 +324,8 @@ def cmd_set_effort(store: ProjectStore, args) -> None:
 
             if not found_person:
                 raise ValueError(f"Person '{target_name}' not found in config")
-    except ValueError as e:
-        print(f"Error: {e}")
-        return
+    except ValueError:
+        raise
 
     print(f"Config saved to {config_path}")
     git_commit_change(
@@ -351,8 +338,7 @@ def cmd_remove_effort(store: ProjectStore, args) -> None:
     config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
 
     if not config_path.exists():
-        print(f"Error: Personnel config not found: {config_path}")
-        return
+        raise ValueError(f"Personnel config not found: {config_path}")
 
     if getattr(args, "start", None):
         args.start = parse_date_input(args.start)
@@ -366,8 +352,7 @@ def cmd_remove_effort(store: ProjectStore, args) -> None:
     target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
     if error:
-        print(f"Error: {error}")
-        return
+        raise ValueError(error)
 
     if target_name != args.name:
         print(f"Resolved '{args.name}' to: {target_name}")
@@ -413,9 +398,8 @@ def cmd_remove_effort(store: ProjectStore, args) -> None:
 
             if not removed:
                 raise ValueError(f"{target_name} has no assignment to {args.project}")
-    except ValueError as e:
-        print(f"Error: {e}")
-        return
+    except ValueError:
+        raise
 
     print(f"Config saved to {config_path}")
     git_commit_change(args.data_dir, f"remove-effort: {target_name} from {args.project}")
@@ -426,8 +410,7 @@ def cmd_add_person(store: ProjectStore, args) -> None:
     config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
 
     if not config_path.exists():
-        print(f"Error: Personnel config not found: {config_path}")
-        return
+        raise ValueError(f"Personnel config not found: {config_path}")
 
     # Validate type
     valid_types = ["faculty", "postdoc", "grad_student", "staff"]
@@ -436,10 +419,9 @@ def cmd_add_person(store: ProjectStore, args) -> None:
     person_type = type_map.get(person_type, person_type)
 
     if person_type not in valid_types:
-        print(
-            f"Error: Invalid type '{args.type}'. Must be one of: {', '.join(valid_types)} (or phd/grad)"
+        raise ValueError(
+            f"Invalid type '{args.type}'. Must be one of: {', '.join(valid_types)} (or phd/grad)"
         )
-        return
 
     import yaml
 
@@ -451,8 +433,7 @@ def cmd_add_person(store: ProjectStore, args) -> None:
             try:
                 salary = float(args.salary)  # type: ignore[assignment]
             except ValueError:
-                print(f"Error: Invalid salary: {args.salary}")
-                return
+                raise ValueError(f"Invalid salary: {args.salary}") from None
     elif person_type == "grad_student":
         # Default to configured stipend
         rates_path = get_rates_path(Path(args.data_dir))
@@ -464,8 +445,7 @@ def cmd_add_person(store: ProjectStore, args) -> None:
             salary = 47000
         print(f"Using default grad student stipend: ${salary:,.0f}")
     else:
-        print(f"Error: --salary is required for {person_type} personnel.")
-        return
+        raise ValueError(f"--salary is required for {person_type} personnel.")
 
     # Parse effort
     try:
@@ -473,8 +453,7 @@ def cmd_add_person(store: ProjectStore, args) -> None:
         if effort > 1:
             effort = effort / 100
     except ValueError:
-        print(f"Error: Invalid effort: {args.effort}")
-        return
+        raise ValueError(f"Invalid effort: {args.effort}") from None
 
     try:
         with yaml_transaction(config_path) as config:
@@ -503,9 +482,8 @@ def cmd_add_person(store: ProjectStore, args) -> None:
             }
 
             config.setdefault("personnel", []).append(new_person)
-    except ValueError as e:
-        print(f"Error: {e}")
-        return
+    except ValueError:
+        raise
 
     date_info = ""
     if args.start:

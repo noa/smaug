@@ -4,12 +4,33 @@
 
 Smaug helps PIs and lab managers track grant spending, project burn rates, manage personnel effort allocations, and forecast stop-work dates — all from the command line.
 
-> [!IMPORTANT]
-> **Privacy & Separation of Concerns:**
-> Smaug is designed with a strict separation between code and sensitive data. All grant budgets, personnel salaries, and financial transaction histories reside strictly on your local machine and are **never** stored or tracked inside the package codebase.
+
+<details open>
+<summary><b>💬 Example: Claude + Smaug MCP</b></summary>
+
+> **You:** We got our April spending report for ARIA. When does the money run out, and what happens if Priya goes on internship this summer?
+
+> **Claude:** I'll import the report, check the forecast, and model the internship scenario.
 >
-> * **Default Data Location:** By default, your workspace state is stored in `~/.smaug/` in your user home directory.
-> * **Customizing the Location:** You can override this default by setting the `SMAUG_DATA_DIR` environment variable, or by passing the `--data-dir /path/to/dir` option to any CLI command.
+> *Called `import_report` — imported April 2026 spending report for ARIA*
+>
+> *Called `stopwork_forecast` for ARIA*
+>
+> Based on April actuals ($287,431 cumulative against a $1.2M ceiling), ARIA hits stop-work in **March 2028** at the current burn rate of ~$38k/month:
+>
+> | Month | Projected | Cumulative | Remaining | Status |
+> |-------|-----------|-----------|-----------|--------|
+> | 2026-05 | $38,219 | $325,650 | $874,350 | OK |
+> | … | | | | |
+> | 2028-02 | $39,106 | $1,178,304 | $21,696 | OK |
+> | 2028-03 | $39,106 | $1,217,410 | −$17,410 | ⛔ Stop-work |
+>
+> *Called `spend_plan` with `override_effort: [{name: "Priya", effort_pct: 0, start: "2026-06", end: "2026-09"}]`*
+>
+> If Priya is at 0% for June–September (internship), you save ~$28,800 over those four months (stipend + fringe + tuition). That pushes stop-work out to **April 2028** — one extra month. Want me to set up that date-bounded effort change now, or model other scenarios first?
+
+</details>
+
 
 ---
 
