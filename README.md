@@ -29,6 +29,12 @@ Smaug helps PIs and lab managers track grant spending, project burn rates, manag
 >
 > If Priya is at 0% for June–September (internship), you save ~$28,800 over those four months (stipend + fringe + tuition). That pushes stop-work out to **April 2028** — one extra month. Want me to set up that date-bounded effort change now, or model other scenarios first?
 
+To try this yourself: install [Claude Desktop](https://claude.ai/download), then register Smaug as an MCP tool:
+```bash
+smaug setup mcp
+```
+See [Set up the MCP server](#set-up-the-mcp-server-optional) below for details.
+
 </details>
 
 
