@@ -203,3 +203,84 @@ class TestStructuredResponses:
         res = temp_api.set_departure("Smith, Jane", "2028-06")
         assert res["success"] is True
         assert res["departure_date"] == "2028-06"
+
+
+@pytest.fixture
+def anon_api(tmp_path):
+    """SmaugAPI with anonymization enabled, pointed at a mutable copy of examples."""
+    shutil.copytree(EXAMPLES_DIR, tmp_path / "data", dirs_exist_ok=True)
+    return SmaugAPI(tmp_path / "data", anonymize=True)
+
+
+class TestAnonymizationPrivacy:
+    """Bug: error messages leaked real names when anonymization was enabled.
+
+    When an MCP agent called set_assignment_end("PhD 1", "ARTS", "2026-06"),
+    the error message returned "Person 'Mahapatra, Aurosweta' not found in config"
+    — exposing the real identity behind the anonymized label.
+    """
+
+    def _get_real_names(self, api: SmaugAPI) -> list[str]:
+        """Get all real personnel names from the config."""
+        from smaug.cli._util import Anonymizer
+
+        return list(Anonymizer._real_to_anon.keys())
+
+    def test_error_messages_never_contain_real_names(self, anon_api):
+        """Error responses must use anonymized names, not real ones."""
+        from smaug.cli._util import Anonymizer
+
+        real_names = self._get_real_names(anon_api)
+        assert len(real_names) > 0, "Anonymizer should have mapped some names"
+
+        # Pick a real name and its anonymized label
+        real_name = real_names[0]
+        anon_name = Anonymizer.anonymize(real_name)
+        assert anon_name != real_name, "Anonymization should change the name"
+
+        # Try an operation that will fail — the error message must NOT
+        # contain the real name, only the anonymized one
+        res = anon_api.set_assignment_end(anon_name, "NONEXISTENT_PROJECT", "2026-06")
+        error_msg = res.get("error", "")
+        assert real_name not in error_msg, f"Real name '{real_name}' leaked in error: {error_msg}"
+
+    def test_set_effort_error_scrubs_real_names(self, anon_api):
+        """set_personnel_effort errors must not leak real names."""
+
+        real_names = self._get_real_names(anon_api)
+
+        # Use a totally invalid name — error should not contain any real names
+        res = anon_api.set_personnel_effort("ZZZZZ_INVALID", "QUASAR", 50.0)
+        assert "error" in res
+        for real_name in real_names:
+            assert real_name not in res["error"], (
+                f"Real name '{real_name}' leaked in error: {res['error']}"
+            )
+
+    def test_successful_write_scrubs_real_names(self, anon_api):
+        """Even success responses must not contain real names."""
+        from smaug.cli._util import Anonymizer
+
+        real_names = self._get_real_names(anon_api)
+        first_anon = Anonymizer.anonymize(real_names[0])
+
+        res = anon_api.set_personnel_effort(first_anon, "QUASAR", 25.0)
+        # Check all string values in the result
+        result_str = str(res)
+        for real_name in real_names:
+            assert real_name not in result_str, (
+                f"Real name '{real_name}' leaked in result: {result_str}"
+            )
+
+    def test_multi_match_error_scrubs_names(self, anon_api):
+        """Fuzzy match errors listing multiple candidates must use anonymized names."""
+
+        real_names = self._get_real_names(anon_api)
+
+        # Use a very short query that might match multiple people
+        res = anon_api.set_departure(",", "2028-06")
+        if "error" in res:
+            for real_name in real_names:
+                assert real_name not in res["error"], (
+                    f"Real name '{real_name}' leaked in multi-match error: {res['error']}"
+                )

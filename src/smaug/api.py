@@ -9,6 +9,7 @@ CLI commands delegate here for computation, then handle formatting.
 """
 
 import contextlib
+import sys
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -78,6 +79,54 @@ class SmaugAPI:
 
     def _config_path(self) -> Path:
         return self._data_dir / "projects" / "personnel_config.yaml"
+
+    def _sanitize_result(self, result: dict) -> dict:
+        """Re-anonymize any real names that leaked into error messages or return values.
+
+        When anonymization is enabled, CLI commands internally de-anonymize names
+        (e.g. "PhD 1" → "Mahapatra, Aurosweta") to operate on the YAML config.
+        If an error occurs, the real name can appear in the error message. This
+        method scrubs those leaks before the result reaches the MCP layer.
+        """
+        from .cli._util import Anonymizer
+
+        if not Anonymizer.enabled:
+            return result
+
+        def _scrub(value: object) -> object:
+            if isinstance(value, str):
+                # Replace any real names with their anonymized form.
+                # Process longest names first to avoid partial replacements.
+                for real_name in sorted(Anonymizer._real_to_anon, key=len, reverse=True):
+                    if real_name in value:
+                        value = value.replace(real_name, Anonymizer._real_to_anon[real_name])
+                return value
+            if isinstance(value, dict):
+                return {k: _scrub(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_scrub(v) for v in value]
+            return value
+
+        return _scrub(result)  # type: ignore[return-value]
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _suppress_stdout():
+        """Suppress stdout during CLI command execution.
+
+        CLI write commands use print() for informational messages (e.g.
+        "Resolved 'PhD 1' to: Mahapatra, Aurosweta"). When running under
+        the MCP server (stdio transport), these print() calls would both
+        leak real names and corrupt the JSON-RPC protocol stream.
+        """
+        import io
+
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
 
     def _load_personnel_config(self):
         from .projections import load_personnel_config
@@ -778,27 +827,30 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        try:
-            cmd_set_effort(
-                self._get_store(),
-                DummyArgs(
-                    data_dir=self.data_dir,
-                    name=name,
-                    project=project,
-                    effort=str(effort_pct),
-                    start=start,
-                    end=end,
-                ),
-            )
-            self._store = None  # Invalidate cache so reads reflect the write
-            return {
-                "success": True,
-                "name": name,
-                "project": project,
-                "effort_pct": effort_pct,
-            }
-        except Exception as e:
-            return {"error": str(e)}
+        with self._suppress_stdout():
+            try:
+                cmd_set_effort(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        name=name,
+                        project=project,
+                        effort=str(effort_pct),
+                        start=start,
+                        end=end,
+                    ),
+                )
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result(
+                    {
+                        "success": True,
+                        "name": name,
+                        "project": project,
+                        "effort_pct": effort_pct,
+                    }
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
 
     def remove_personnel_effort(
         self,
@@ -822,21 +874,22 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        try:
-            cmd_remove_effort(
-                self._get_store(),
-                DummyArgs(
-                    data_dir=self.data_dir,
-                    name=name,
-                    project=project,
-                    start=start,
-                    end=end,
-                ),
-            )
-            self._store = None  # Invalidate cache so reads reflect the write
-            return {"success": True, "name": name, "project": project}
-        except Exception as e:
-            return {"error": str(e)}
+        with self._suppress_stdout():
+            try:
+                cmd_remove_effort(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        name=name,
+                        project=project,
+                        start=start,
+                        end=end,
+                    ),
+                )
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result({"success": True, "name": name, "project": project})
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
 
     def add_personnel(
         self,
@@ -854,30 +907,33 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        try:
-            cmd_add_person(
-                self._get_store(),
-                DummyArgs(
-                    data_dir=self.data_dir,
-                    name=name,
-                    type=person_type,
-                    project=project,
-                    effort=str(effort_pct),
-                    salary=str(salary) if salary else None,
-                    start=None,
-                    end=None,
-                ),
-            )
-            self._store = None  # Invalidate cache so reads reflect the write
-            return {
-                "success": True,
-                "name": name,
-                "type": person_type,
-                "project": project,
-                "effort_pct": effort_pct,
-            }
-        except Exception as e:
-            return {"error": str(e)}
+        with self._suppress_stdout():
+            try:
+                cmd_add_person(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        name=name,
+                        type=person_type,
+                        project=project,
+                        effort=str(effort_pct),
+                        salary=str(salary) if salary else None,
+                        start=None,
+                        end=None,
+                    ),
+                )
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result(
+                    {
+                        "success": True,
+                        "name": name,
+                        "type": person_type,
+                        "project": project,
+                        "effort_pct": effort_pct,
+                    }
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
 
     def add_travel_item(
         self,
@@ -895,23 +951,26 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        try:
-            cmd_travel(
-                self._get_store(),
-                DummyArgs(
-                    data_dir=self.data_dir,
-                    action="add",
-                    project=project,
-                    description=description,
-                    date=date_str,
-                    amount=str(amount),
-                    traveler=traveler,
-                ),
-            )
-            self._store = None  # Invalidate cache so reads reflect the write
-            return {"success": True, "project": project, "description": description}
-        except Exception as e:
-            return {"error": str(e)}
+        with self._suppress_stdout():
+            try:
+                cmd_travel(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        action="add",
+                        project=project,
+                        description=description,
+                        date=date_str,
+                        amount=str(amount),
+                        traveler=traveler,
+                    ),
+                )
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result(
+                    {"success": True, "project": project, "description": description}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
 
     def add_expense_item(
         self,
@@ -931,25 +990,28 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        try:
-            cmd_expense(
-                self._get_store(),
-                DummyArgs(
-                    data_dir=self.data_dir,
-                    action="add",
-                    project=project,
-                    description=description,
-                    amount=str(amount),
-                    category=category,
-                    date=date_str,
-                    start=start_str,
-                    end=end_str,
-                ),
-            )
-            self._store = None  # Invalidate cache so reads reflect the write
-            return {"success": True, "project": project, "description": description}
-        except Exception as e:
-            return {"error": str(e)}
+        with self._suppress_stdout():
+            try:
+                cmd_expense(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        action="add",
+                        project=project,
+                        description=description,
+                        amount=str(amount),
+                        category=category,
+                        date=date_str,
+                        start=start_str,
+                        end=end_str,
+                    ),
+                )
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result(
+                    {"success": True, "project": project, "description": description}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
 
     def spend_plan(
         self,
@@ -1449,21 +1511,22 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        try:
-            cmd_set_salary(
-                self._get_store(),
-                DummyArgs(
-                    data_dir=self.data_dir,
-                    name=name,
-                    salary=str(salary),
-                    start=start,
-                    end=end,
-                ),
-            )
-            self._store = None  # Invalidate cache so reads reflect the write
-            return {"success": True, "name": name, "salary": salary}
-        except Exception as e:
-            return {"error": str(e)}
+        with self._suppress_stdout():
+            try:
+                cmd_set_salary(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        name=name,
+                        salary=str(salary),
+                        start=start,
+                        end=end,
+                    ),
+                )
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result({"success": True, "name": name, "salary": salary})
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
 
     # ------------------------------------------------------------------
     # Write: set_assignment_end
@@ -1478,15 +1541,18 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        try:
-            cmd_set_end(
-                self._get_store(),
-                DummyArgs(data_dir=self.data_dir, name=name, project=project, date=end_date),
-            )
-            self._store = None  # Invalidate cache so reads reflect the write
-            return {"success": True, "name": name, "project": project, "end_date": end_date}
-        except Exception as e:
-            return {"error": str(e)}
+        with self._suppress_stdout():
+            try:
+                cmd_set_end(
+                    self._get_store(),
+                    DummyArgs(data_dir=self.data_dir, name=name, project=project, date=end_date),
+                )
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result(
+                    {"success": True, "name": name, "project": project, "end_date": end_date}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
 
     # ------------------------------------------------------------------
     # Write: set_departure
@@ -1501,12 +1567,15 @@ class SmaugAPI:
                 for k, v in kwargs.items():
                     setattr(self, k, v)
 
-        try:
-            cmd_set_departure(
-                self._get_store(),
-                DummyArgs(data_dir=self.data_dir, name=name, date=departure_date),
-            )
-            self._store = None  # Invalidate cache so reads reflect the write
-            return {"success": True, "name": name, "departure_date": departure_date}
-        except Exception as e:
-            return {"error": str(e)}
+        with self._suppress_stdout():
+            try:
+                cmd_set_departure(
+                    self._get_store(),
+                    DummyArgs(data_dir=self.data_dir, name=name, date=departure_date),
+                )
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result(
+                    {"success": True, "name": name, "departure_date": departure_date}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
