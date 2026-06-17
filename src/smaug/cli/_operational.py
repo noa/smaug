@@ -142,6 +142,30 @@ def cmd_travel(store: ProjectStore, args) -> None:
         )
 
 
+def _find_expense_matches(items: list, project: str, description: str) -> list:
+    """Return indices of expense items matching a project and description.
+
+    Matching is case-insensitive. An exact description match is preferred; if
+    none are found, a substring match is attempted so partial descriptions
+    (e.g. 'compute') can identify a line.
+    """
+    target = description.strip().lower()
+
+    exact = [
+        i
+        for i, item in enumerate(items)
+        if item.get("project") == project and str(item.get("description", "")).lower() == target
+    ]
+    if exact:
+        return exact
+
+    return [
+        i
+        for i, item in enumerate(items)
+        if item.get("project") == project and target in str(item.get("description", "")).lower()
+    ]
+
+
 def cmd_expense(store: ProjectStore, args) -> None:
     """Manage recurrent and one-time expenses."""
 
@@ -221,6 +245,97 @@ def cmd_expense(store: ProjectStore, args) -> None:
 
         git_commit_change(
             args.data_dir, f"expense-add: {args.project} - {args.description} (${args.amount})"
+        )
+
+    elif args.action == "remove":
+        from ..yaml_utils import git_commit_change, yaml_transaction
+
+        if not config_path.exists():
+            print(f"Error: No expenses found for project {args.project}.")
+            return
+
+        with yaml_transaction(config_path) as existing_data:
+            raw_items: list[dict] = existing_data.get("items", [])
+            matches = _find_expense_matches(raw_items, args.project, args.description)
+
+            if not matches:
+                print(f"Error: No expense matching '{args.description}' found for {args.project}.")
+                return
+            if len(matches) > 1:
+                print(
+                    f"Error: '{args.description}' is ambiguous for {args.project}; "
+                    f"matches {len(matches)} items: "
+                    + ", ".join(repr(raw_items[i].get("description")) for i in matches)
+                    + ". Use a more specific description."
+                )
+                return
+
+            removed_entry = raw_items.pop(matches[0])
+
+        git_commit_change(
+            args.data_dir,
+            f"expense-remove: {args.project} - {removed_entry.get('description')}",
+        )
+        print(
+            f"Removed expense from {args.project}: {removed_entry.get('description')} "
+            f"(${removed_entry.get('amount')})"
+        )
+
+    elif args.action == "edit":
+        from ..yaml_utils import git_commit_change, yaml_transaction
+
+        if not config_path.exists():
+            print(f"Error: No expenses found for project {args.project}.")
+            return
+
+        with yaml_transaction(config_path) as existing_data:
+            raw_items = existing_data.get("items", [])
+            matches = _find_expense_matches(raw_items, args.project, args.description)
+
+            if not matches:
+                print(f"Error: No expense matching '{args.description}' found for {args.project}.")
+                return
+            if len(matches) > 1:
+                print(
+                    f"Error: '{args.description}' is ambiguous for {args.project}; "
+                    f"matches {len(matches)} items: "
+                    + ", ".join(repr(raw_items[i].get("description")) for i in matches)
+                    + ". Use a more specific description."
+                )
+                return
+
+            entry = raw_items[matches[0]]
+
+            if getattr(args, "new_description", None) is not None:
+                entry["description"] = args.new_description
+            if getattr(args, "amount", None) is not None:
+                entry["amount"] = float(args.amount)
+            if getattr(args, "category", None) is not None:
+                entry["category"] = args.category
+
+            # Date changes: switching to one-time clears recurring fields and
+            # vice versa, so the item never ends up with conflicting schedules.
+            if getattr(args, "date", None) is not None:
+                entry["date"] = parse_date_input(args.date)
+                entry.pop("start", None)
+                entry.pop("end", None)
+            else:
+                if getattr(args, "start", None) is not None:
+                    entry["start"] = parse_date_input(args.start)
+                    entry.pop("date", None)
+                if getattr(args, "end", None) is not None:
+                    entry["end"] = parse_date_input(args.end)
+                    entry.pop("date", None)
+
+            updated_entry = dict(entry)
+
+        git_commit_change(
+            args.data_dir,
+            f"expense-edit: {args.project} - {updated_entry.get('description')}",
+        )
+        print(
+            f"Updated expense for {args.project}: {updated_entry.get('description')} "
+            f"(${updated_entry.get('amount')})"
         )
 
 

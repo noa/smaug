@@ -122,9 +122,10 @@ class SmaugAPI:
         import io
 
         old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
+        buf = io.StringIO()
+        sys.stdout = buf
         try:
-            yield
+            yield buf
         finally:
             sys.stdout = old_stdout
 
@@ -1009,6 +1010,86 @@ class SmaugAPI:
                 self._store = None  # Invalidate cache so reads reflect the write
                 return self._sanitize_result(
                     {"success": True, "project": project, "description": description}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def remove_expense_item(self, project: str, description: str) -> dict:
+        """Remove an expense item, identified by project and description."""
+        from .cli._operational import cmd_expense
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout() as captured:
+            try:
+                cmd_expense(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        action="remove",
+                        project=project,
+                        description=description,
+                    ),
+                )
+                output = captured.getvalue()
+                if "Error:" in output:
+                    return self._sanitize_result({"error": output.strip()})
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result(
+                    {"success": True, "project": project, "description": description}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def edit_expense_item(
+        self,
+        project: str,
+        description: str,
+        amount: float | None = None,
+        new_description: str | None = None,
+        category: str | None = None,
+        date_str: str | None = None,
+        start_str: str | None = None,
+        end_str: str | None = None,
+    ) -> dict:
+        """Edit an existing expense item, identified by project and description."""
+        from .cli._operational import cmd_expense
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout() as captured:
+            try:
+                cmd_expense(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        action="edit",
+                        project=project,
+                        description=description,
+                        amount=amount,
+                        new_description=new_description,
+                        category=category,
+                        date=date_str,
+                        start=start_str,
+                        end=end_str,
+                    ),
+                )
+                output = captured.getvalue()
+                if "Error:" in output:
+                    return self._sanitize_result({"error": output.strip()})
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result(
+                    {
+                        "success": True,
+                        "project": project,
+                        "description": new_description or description,
+                    }
                 )
             except Exception as e:
                 return self._sanitize_result({"error": str(e)})

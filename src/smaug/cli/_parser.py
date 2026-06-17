@@ -479,6 +479,24 @@ def main():
     expense_add.add_argument("--start", help="Start date for recurring (YYYY-MM-DD)")
     expense_add.add_argument("--end", help="End date for recurring (YYYY-MM-DD)")
 
+    # expense remove
+    expense_remove = expense_subparsers.add_parser("remove", help="Remove an expense")
+    expense_remove.add_argument("project", help="Project short name")
+    expense_remove.add_argument("description", help="Description of the expense to remove")
+
+    # expense edit
+    expense_edit = expense_subparsers.add_parser("edit", help="Edit an existing expense")
+    expense_edit.add_argument("project", help="Project short name")
+    expense_edit.add_argument("description", help="Description of the expense to edit")
+    expense_edit.add_argument("--amount", type=float, help="New amount")
+    expense_edit.add_argument("--new-description", dest="new_description", help="New description")
+    expense_edit.add_argument("--category", help="New category (Equipment, Other, etc)")
+    expense_edit.add_argument(
+        "--date", help="Convert to one-time expense on this date (YYYY-MM-DD)"
+    )
+    expense_edit.add_argument("--start", help="New start date for recurring (YYYY-MM-DD)")
+    expense_edit.add_argument("--end", help="New end date for recurring (YYYY-MM-DD)")
+
     expense_parser.set_defaults(func=cmd_expense)
 
     # invoice command

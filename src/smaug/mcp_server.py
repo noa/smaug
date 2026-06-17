@@ -647,6 +647,67 @@ def main():
             indent=2,
         )
 
+    @mcp.tool()
+    def edit_expense_item(
+        project: str,
+        description: str,
+        amount: float | None = None,
+        new_description: str | None = None,
+        category: str | None = None,
+        date_str: str | None = None,
+        start_str: str | None = None,
+        end_str: str | None = None,
+    ) -> str:
+        """Edit an existing expense/purchase line item on a project.
+
+        The item is located by its current description (case-insensitive; an
+        exact match is preferred, otherwise a substring match). Only the fields
+        you supply are changed. Setting date_str converts the item to a one-time
+        expense; setting start_str/end_str makes it recurring.
+
+        Args:
+            project: Project short name.
+            description: Current description identifying the item to edit
+                (e.g. 'GPU cluster access' or just 'compute').
+            amount: New amount, if changing it.
+            new_description: New description, if renaming the item.
+            category: New category ('Equipment', 'Materials and Supplies', 'Other').
+            date_str: Convert to a one-time expense on this date (YYYY-MM-DD).
+            start_str: New start date for a recurring expense (YYYY-MM).
+            end_str: New end date for a recurring expense (YYYY-MM).
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.edit_expense_item(
+                project,
+                description,
+                amount=amount,
+                new_description=new_description,
+                category=category,
+                date_str=date_str,
+                start_str=start_str,
+                end_str=end_str,
+            ),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def remove_expense_item(project: str, description: str) -> str:
+        """Remove an expense/purchase line item from a project.
+
+        The item is located by its description (case-insensitive; an exact match
+        is preferred, otherwise a substring match). If the description matches
+        more than one item, an error is returned listing the candidates so you
+        can supply a more specific description.
+
+        Args:
+            project: Project short name.
+            description: Description identifying the item to remove
+                (e.g. 'GPU cluster access' or just 'compute').
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.remove_expense_item(project, description), indent=2)
+
     # ------------------------------------------------------------------
     # Notes Tools
     # ------------------------------------------------------------------

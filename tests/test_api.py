@@ -268,6 +268,60 @@ class TestWriteCommandsAPI:
         )
         assert res.get("success") is True
 
+    def _quasar_expenses(self, temp_api):
+        store = temp_api._get_store()
+        store.load_purchases_config()
+        return store.get_project_expenses("QUASAR")
+
+    def test_expense_item_crud(self, temp_api):
+        # 1. Add a recurring compute line.
+        res = temp_api.add_expense_item(
+            "QUASAR",
+            "GPU cluster access",
+            2000.0,
+            category="Other",
+            start_str="2026-06-01",
+            end_str="2026-12-31",
+        )
+        assert res.get("success") is True
+
+        # 2. Edit the amount via a substring match on the description.
+        res = temp_api.edit_expense_item("QUASAR", "GPU cluster", amount=2500.0)
+        assert res.get("success") is True
+
+        matches = [e for e in self._quasar_expenses(temp_api) if "GPU cluster" in e.description]
+        assert len(matches) == 1
+        assert float(matches[0].amount) == 2500.0
+
+        # 3. Rename and recategorize the line.
+        res = temp_api.edit_expense_item(
+            "QUASAR",
+            "GPU cluster access",
+            new_description="Compute (GPU)",
+            category="Equipment",
+        )
+        assert res.get("success") is True
+
+        renamed = [e for e in self._quasar_expenses(temp_api) if e.description == "Compute (GPU)"]
+        assert len(renamed) == 1
+        assert renamed[0].category == "Equipment"
+
+        # 4. Remove it.
+        res = temp_api.remove_expense_item("QUASAR", "Compute (GPU)")
+        assert res.get("success") is True
+        assert not [e for e in self._quasar_expenses(temp_api) if e.description == "Compute (GPU)"]
+
+    def test_edit_expense_item_not_found(self, temp_api):
+        res = temp_api.edit_expense_item("QUASAR", "Nonexistent line", amount=100.0)
+        assert "error" in res
+
+    def test_remove_expense_item_ambiguous(self, temp_api):
+        temp_api.add_expense_item("QUASAR", "Cloud compute A", 100.0, date_str="2026-07-01")
+        temp_api.add_expense_item("QUASAR", "Cloud compute B", 200.0, date_str="2026-07-01")
+        res = temp_api.remove_expense_item("QUASAR", "Cloud compute")
+        assert "error" in res
+        assert "ambiguous" in res["error"].lower()
+
     def test_date_bounded_effort_crud(self, temp_api):
         res = temp_api.set_personnel_effort(
             "Smith, Jane", "QUASAR", 20.0, start="2026-06", end="2026-09"
