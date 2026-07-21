@@ -550,6 +550,7 @@ def cmd_spend_plan(store: ProjectStore, args) -> None:
                 # Use shorter type names for display
                 type_display = {
                     "grad_student": "PhD",
+                    "masters_student": "Masters",
                     "postdoc": "Postdoc",
                     "faculty": "Faculty",
                     "staff": "Staff",
@@ -1371,6 +1372,7 @@ def cmd_proposal(store: ProjectStore, args) -> None:
         effort_pct = int(p.effort * 100)
         type_display = {
             "grad_student": "PhD",
+            "masters_student": "Masters",
             "part_time": "Masters",
             "postdoc": "Postdoc",
             "faculty": "Faculty",
@@ -1426,6 +1428,7 @@ def cmd_proposal(store: ProjectStore, args) -> None:
             person.label,
             {
                 "grad_student": "PhD",
+                "masters_student": "Masters",
                 "part_time": "Masters",
                 "postdoc": "Postdoc",
                 "faculty": "Faculty",

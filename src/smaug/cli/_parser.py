@@ -52,6 +52,7 @@ from ._write_commands import (
     cmd_set_salary,
     cmd_set_status,
     cmd_set_tuition,
+    cmd_set_type,
 )
 
 
@@ -155,6 +156,15 @@ def main():
     depart_parser.add_argument("date", help="Departure date as YYYY-MM")
     depart_parser.set_defaults(func=cmd_set_departure)
 
+    # set-type command
+    type_parser = subparsers.add_parser("set-type", help="Set personnel type")
+    type_parser.add_argument("name", help="Person name or index number")
+    type_parser.add_argument(
+        "type",
+        help="Person type: faculty, postdoc, grad_student/phd, masters_student/masters/ms, staff",
+    )
+    type_parser.set_defaults(func=cmd_set_type)
+
     # set-salary command
     salary_parser = subparsers.add_parser("set-salary", help="Set annual salary")
     salary_parser.add_argument("name", help="Person name or index number")
@@ -194,12 +204,19 @@ def main():
     addperson_parser = subparsers.add_parser("add-person", help="Add new personnel")
     addperson_parser.add_argument("name", help="Full name (Last, First)")
     addperson_parser.add_argument(
-        "type", help="Person type: faculty, postdoc, grad_student/phd, staff"
+        "type",
+        help="Person type: faculty, postdoc, grad_student/phd, masters_student/masters/ms, staff",
     )
     addperson_parser.add_argument("project", help="Initial project assignment")
     addperson_parser.add_argument("effort", help="Effort as decimal (0.25) or percent (25)")
     addperson_parser.add_argument(
-        "--salary", help="Annual salary (default: stipend for grad students)"
+        "--salary",
+        help="Annual salary (default: stipend for grad students, hourly rate for masters)",
+    )
+    addperson_parser.add_argument(
+        "--hours",
+        type=float,
+        help="Hours per week for hourly personnel (default from rates.yaml, max 19.9 for masters)",
     )
     addperson_parser.add_argument("--start", help="Start date as YYYY-MM")
     addperson_parser.add_argument("--end", help="End date as YYYY-MM")

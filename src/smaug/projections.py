@@ -27,6 +27,10 @@ class Rates:
     tuition_per_semester: Decimal = Decimal("0")
     insurance_annual: Decimal = Decimal("0")
     tuition_months: list[int] | None = None  # Months when tuition is billed (e.g., [1, 9])
+    masters_tuition_per_semester: Decimal = Decimal("0")
+    masters_hourly_default: Decimal = Decimal("20")
+    masters_hours_per_week_default: Decimal = Decimal("20")
+    masters_max_hours_per_week: Decimal = Decimal("19.9")
 
 
 @dataclass
@@ -58,6 +62,10 @@ class PersonnelEntry:
     assignments: list[Assignment]
     departure: date | None = None  # Overall end date (leaves university)
     salaries: list[SalaryRecord] = field(default_factory=list)
+    hourly_rate: Decimal | None = None
+    hours_per_week: Decimal | None = None
+    include_tuition: bool = True
+    include_insurance: bool = True
 
 
 @dataclass
@@ -137,13 +145,16 @@ def parse_hypothetical(spec: str) -> Hypothetical:
             "phd": "grad_student",
             "grad": "grad_student",
             "grad_student": "grad_student",
+            "masters": "masters_student",
+            "ms": "masters_student",
+            "masters_student": "masters_student",
             "postdoc": "postdoc",
             "staff": "staff",
             "faculty": "faculty",
         }
         if person_type not in type_map:
             raise ValueError(
-                f"Unknown person type: {person_type}. Use phd, postdoc, staff, or faculty."
+                f"Unknown person type: {person_type}. Use phd, masters, postdoc, staff, or faculty."
             )
 
         return Hypothetical(
@@ -207,6 +218,11 @@ def apply_hypotheticals(
                 salary = hypo.salary or rates.tuition_per_semester * 2 + rates.insurance_annual
                 # Actually use a reasonable default
                 salary = Decimal("47000")  # Standard stipend
+            elif hypo.person_type == "masters_student":
+                # Hourly masters: default salary = hourly * hours/week * 52
+                salary = hypo.salary or (
+                    rates.masters_hourly_default * rates.masters_hours_per_week_default * 52
+                )
             else:
                 if hypo.salary is None:
                     raise ValueError(f"Salary required for hypothetical {hypo.person_type}")
@@ -393,6 +409,20 @@ def load_personnel_config(config_path: str | Path) -> tuple[Rates, list[Personne
                 str(gs_costs.get("health_dental", gs_costs.get("insurance", 0)))
             ),
             tuition_months=tuition_billing.get("months", [1, 9]),
+            masters_tuition_per_semester=Decimal(
+                str(
+                    tuition_billing.get(
+                        "masters_per_semester", gs_costs.get("masters_tuition", 0) / 2
+                    )
+                )
+            ),
+            masters_hourly_default=Decimal(str(rates_config.get("masters_hourly", 20))),
+            masters_hours_per_week_default=Decimal(
+                str(rates_config.get("masters_hours_per_week", 20))
+            ),
+            masters_max_hours_per_week=Decimal(
+                str(rates_config.get("masters_max_hours_per_week", "19.9"))
+            ),
         )
     elif "rates" in config:
         # Fallback to rates in personnel_config.yaml
@@ -414,11 +444,16 @@ def load_personnel_config(config_path: str | Path) -> tuple[Rates, list[Personne
                 "faculty": Decimal("0.34"),
                 "postdoc": Decimal("0.227"),
                 "grad_student": Decimal("0.0"),
+                "masters_student": Decimal("0.0825"),
                 "staff": Decimal("0.34"),
             },
             tuition_per_semester=Decimal("6667"),
             insurance_annual=Decimal("2785"),
             tuition_months=[1, 9],
+            masters_tuition_per_semester=Decimal("33335"),
+            masters_hourly_default=Decimal("20"),
+            masters_hours_per_week_default=Decimal("20"),
+            masters_max_hours_per_week=Decimal("19.9"),
         )
 
     # Parse personnel
@@ -437,7 +472,34 @@ def load_personnel_config(config_path: str | Path) -> tuple[Rates, list[Personne
 
         raw_salary = p.get("annual_salary", 0)
         salaries = []
-        if isinstance(raw_salary, list):
+        hourly_rate = None
+        hours_per_week = None
+        include_tuition = p.get("include_tuition", True)
+        include_insurance = p.get("include_insurance", True)
+
+        if p["type"] == "masters_student":
+            # Hourly masters: compute annual salary from rate * hours * 52
+            hourly_rate = Decimal(str(p.get("hourly_rate", 0))) if p.get("hourly_rate") else None
+            hours_per_week = (
+                Decimal(str(p.get("hours_per_week", 0))) if p.get("hours_per_week") else None
+            )
+            effective_hourly = hourly_rate or rates.masters_hourly_default
+            effective_hours = hours_per_week or rates.masters_hours_per_week_default
+            if effective_hours > rates.masters_max_hours_per_week:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "%s: hours_per_week %.1f exceeds JHU cap of %.1f",
+                    p["name"],
+                    effective_hours,
+                    rates.masters_max_hours_per_week,
+                )
+            if raw_salary and Decimal(str(raw_salary)) > 0:
+                annual_salary = Decimal(str(raw_salary))
+            else:
+                annual_salary = effective_hourly * effective_hours * 52
+            salaries = [SalaryRecord(amount=annual_salary, start=None, end=None)]
+        elif isinstance(raw_salary, list):
             for s in raw_salary:
                 salaries.append(
                     SalaryRecord(
@@ -459,6 +521,10 @@ def load_personnel_config(config_path: str | Path) -> tuple[Rates, list[Personne
                 assignments=resolve_assignment_overlaps(assignments),
                 departure=parse_date(p.get("departure")),
                 salaries=salaries,
+                hourly_rate=hourly_rate,
+                hours_per_week=hours_per_week,
+                include_tuition=include_tuition,
+                include_insurance=include_insurance,
             )
         )
 
@@ -587,10 +653,18 @@ def project_monthly_costs(
 
             # Fringe based on type
             fringe_rate = rates.fringe.get(person.person_type, Decimal("0.34"))
+            if person.person_type == "masters_student":
+                # FICA exempt (0% fringe) during Academic Year (Sept - May)
+                # Subject to Casual/Limited rate during Summer (June - Aug)
+                if month in (6, 7, 8):
+                    fringe_rate = rates.fringe.get("masters_student", Decimal("0.0825"))
+                else:
+                    fringe_rate = Decimal("0.0")
+
             person_fringe = monthly_salary * fringe_rate
             fringe += person_fringe
 
-            # Add tuition and insurance for grad students
+            # Add tuition and insurance for grad/masters students
             person_tuition = Decimal("0")
             person_insurance = Decimal("0")
             if person.person_type == "grad_student" and is_tuition_month:
@@ -599,6 +673,14 @@ def project_monthly_costs(
                 tuition += person_tuition
                 person_insurance = (rates.insurance_annual / 2) * assignment.effort
                 insurance += person_insurance
+            elif person.person_type == "masters_student" and is_tuition_month:
+                # Masters students: full tuition rate, respect per-person flags
+                if person.include_tuition:
+                    person_tuition = rates.masters_tuition_per_semester * assignment.effort
+                    tuition += person_tuition
+                if person.include_insurance:
+                    person_insurance = (rates.insurance_annual / 2) * assignment.effort
+                    insurance += person_insurance
 
             personnel_detail.append(
                 (person.name, monthly_salary + person_fringe + person_tuition + person_insurance)

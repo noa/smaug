@@ -227,6 +227,9 @@ def generate_proposal_budget(
 
             # Fringe
             fringe_rate = fringe_rates.get(person.person_type, Decimal("0.315"))
+            if person.student_type == "masters":
+                # Only subject to fringe during 3 summer months (June, July, August)
+                fringe_rate = fringe_rate * Decimal("3") / Decimal("12")
             fringe = salary * fringe_rate
             fringe = fringe.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 

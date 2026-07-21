@@ -403,6 +403,7 @@ def main():
                 "results": results,
             },
             indent=2,
+            default=str,
         )
 
     @mcp.tool()
@@ -438,7 +439,7 @@ def main():
         if not invoice_parsers:
             return json.dumps({"error": "No invoice parsers available"})
 
-        store = _Store(data_dir=data_dir)
+        store = _Store(data_dir=data_path)
         store.load_all()
 
         files = _collect_report_files(source)
@@ -473,6 +474,7 @@ def main():
                 "results": results,
             },
             indent=2,
+            default=str,
         )
 
     # ------------------------------------------------------------------
@@ -599,6 +601,17 @@ def main():
         return json.dumps(
             api.add_personnel(name, person_type, project, effort_pct, salary), indent=2
         )
+
+    @mcp.tool()
+    def set_personnel_type(name: str, person_type: str) -> str:
+        """Set or update a person's type (e.g. staff, faculty, postdoc, grad_student).
+
+        Args:
+            name: Personnel name (fuzzy matching supported).
+            person_type: Type of employee ('faculty', 'postdoc', 'grad_student', 'masters_student', 'staff').
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_personnel_type(name, person_type), indent=2)
 
     @mcp.tool()
     def add_travel_item(

@@ -413,25 +413,59 @@ def cmd_add_person(store: ProjectStore, args) -> None:
         raise ValueError(f"Personnel config not found: {config_path}")
 
     # Validate type
-    valid_types = ["faculty", "postdoc", "grad_student", "staff"]
+    valid_types = ["faculty", "postdoc", "grad_student", "masters_student", "staff"]
     person_type = args.type.lower()
-    type_map = {"phd": "grad_student", "grad": "grad_student"}
+    type_map = {
+        "phd": "grad_student",
+        "grad": "grad_student",
+        "masters": "masters_student",
+        "ms": "masters_student",
+    }
     person_type = type_map.get(person_type, person_type)
 
     if person_type not in valid_types:
         raise ValueError(
-            f"Invalid type '{args.type}'. Must be one of: {', '.join(valid_types)} (or phd/grad)"
+            f"Invalid type '{args.type}'. Must be one of: {', '.join(valid_types)} (or phd/grad/masters/ms)"
         )
 
     import yaml
 
     # Determine salary
-    if args.salary:
+    hourly_rate = None
+    hours_per_week = None
+    if person_type == "masters_student":
+        # Hourly masters student
+        rates_path = get_rates_path(Path(args.data_dir))
+        rates_config = {}
+        if rates_path.exists():
+            with open(rates_path) as f:
+                rates_config = yaml.safe_load(f)
+
+        if args.salary:
+            try:
+                hourly_rate = float(args.salary)
+            except ValueError:
+                raise ValueError(f"Invalid hourly rate: {args.salary}") from None
+        else:
+            hourly_rate = float(rates_config.get("masters_hourly", 20))
+            print(f"Using default masters hourly rate: ${hourly_rate:.2f}/hr")
+
+        default_hours = float(rates_config.get("masters_hours_per_week", 20))
+        max_hours = float(rates_config.get("masters_max_hours_per_week", 19.9))
+        hours_per_week = getattr(args, "hours", None) or default_hours
+        if hours_per_week > max_hours:
+            print(f"Warning: {hours_per_week} hrs/wk exceeds JHU cap of {max_hours} hrs/wk")
+
+        salary = hourly_rate * hours_per_week * 52
+        print(
+            f"Computed annual salary: ${salary:,.0f} ({hourly_rate:.2f}/hr * {hours_per_week} hrs/wk * 52 wks)"
+        )
+    elif args.salary:
         try:
             salary = int(args.salary)
         except ValueError:
             try:
-                salary = float(args.salary)  # type: ignore[assignment]
+                salary = float(args.salary)
             except ValueError:
                 raise ValueError(f"Invalid salary: {args.salary}") from None
     elif person_type == "grad_student":
@@ -481,6 +515,13 @@ def cmd_add_person(store: ProjectStore, args) -> None:
                 "assignments": [assignment],
             }
 
+            # Add hourly fields for masters students
+            if person_type == "masters_student":
+                if hourly_rate is not None:
+                    new_person["hourly_rate"] = hourly_rate
+                if hours_per_week is not None:
+                    new_person["hours_per_week"] = hours_per_week
+
             config.setdefault("personnel", []).append(new_person)
     except ValueError:
         raise
@@ -491,8 +532,13 @@ def cmd_add_person(store: ProjectStore, args) -> None:
     if args.end:
         date_info += f" (until {args.end})"
 
-    print(f"Added: {args.name} ({person_type})")
-    print(f"  Salary: ${salary:,}")
+    if person_type == "masters_student":
+        print(
+            f"Added: {args.name} (masters_student, {hourly_rate:.2f}/hr, {hours_per_week} hrs/wk)"
+        )
+    else:
+        print(f"Added: {args.name} ({person_type})")
+        print(f"  Salary: ${salary:,}")
     print(f"  Assignment: {args.project} at {effort * 100:.0f}%{date_info}")
     print(f"Config saved to {config_path}")
     git_commit_change(args.data_dir, f"add-person: {args.name} ({person_type})")
@@ -839,10 +885,23 @@ def cmd_set_fringe(store: ProjectStore, args) -> None:
 
     # Normalize type
     person_type = args.type.lower()
-    type_map = {"phd": "grad_student", "grad": "grad_student"}
+    type_map = {
+        "phd": "grad_student",
+        "grad": "grad_student",
+        "masters": "masters_student",
+        "ms": "masters_student",
+    }
     person_type = type_map.get(person_type, person_type)
 
-    valid_types = ["faculty", "postdoc", "grad_student", "staff", "part_time", "visiting"]
+    valid_types = [
+        "faculty",
+        "postdoc",
+        "grad_student",
+        "masters_student",
+        "staff",
+        "part_time",
+        "visiting",
+    ]
     if person_type not in valid_types:
         print(f"Error: Invalid type '{args.type}'. Must be one of: {', '.join(valid_types)}")
         return
@@ -872,3 +931,72 @@ def cmd_set_fringe(store: ProjectStore, args) -> None:
     print(f"Updated fringe rate for {person_type}: {old_rate * 100:.2f}% -> {rate * 100:.2f}%")
     print(f"Config saved to {rates_path}")
     git_commit_change(args.data_dir, f"set-fringe: {person_type} -> {rate * 100:.2f}%")
+
+
+def cmd_set_type(store: ProjectStore, args) -> None:
+    """Set or update personnel type for a person."""
+    config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
+
+    if not config_path.exists():
+        raise ValueError(f"Personnel config not found: {config_path}")
+
+    # Validate type
+    valid_types = ["faculty", "postdoc", "grad_student", "masters_student", "staff"]
+    person_type = args.type.lower()
+    type_map = {
+        "phd": "grad_student",
+        "grad": "grad_student",
+        "masters": "masters_student",
+        "ms": "masters_student",
+    }
+    person_type = type_map.get(person_type, person_type)
+
+    if person_type not in valid_types:
+        raise ValueError(
+            f"Invalid type '{args.type}'. Must be one of: {', '.join(valid_types)} (or phd/grad/masters/ms)"
+        )
+
+    try:
+        with yaml_transaction(config_path) as config:
+            # Resolve name - could be an index number or actual name
+            tracker = store.get_personnel_tracker()
+            personnel = tracker.get_all_personnel()
+            aliases = load_aliases(args.data_dir)
+            target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
+
+            if error:
+                # Fallback: search YAML config directly (for newly added people not in reports)
+                config_names = [p["name"] for p in config.get("personnel", [])]
+                matches = [n for n in config_names if args.name.lower() in n.lower()]
+                if len(matches) == 1:
+                    target_name = matches[0]
+                    error = None
+                    if target_name != args.name:
+                        print(f"Resolved '{args.name}' to: {target_name}")
+                elif len(matches) > 1:
+                    match_list = "\n".join(f"  - {m}" for m in matches)
+                    raise ValueError(f"Multiple personnel matching '{args.name}':\n{match_list}")
+                else:
+                    raise ValueError(error)
+
+            if target_name != args.name:
+                print(f"Resolved '{args.name}' to: {target_name}")
+
+            # Find the person and set type
+            found = False
+            for person in config.get("personnel", []):
+                if person["name"] == target_name:
+                    old_type = person.get("type")
+                    person["type"] = person_type
+                    found = True
+                    print(f"Updated personnel type: {target_name}")
+                    print(f"  {old_type} -> {person_type}")
+                    break
+
+            if not found:
+                raise ValueError(f"Person '{target_name}' not found in config")
+    except ValueError:
+        raise
+
+    print(f"Config saved to {config_path}")
+    git_commit_change(args.data_dir, f"set-type: {target_name} -> {person_type}")

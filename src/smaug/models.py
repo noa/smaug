@@ -23,6 +23,7 @@ class EmployeeType(Enum):
     FACULTY = "faculty"
     POSTDOC = "postdoc"
     GRAD_STUDENT = "grad_student"
+    MASTERS_STUDENT = "masters_student"
     STAFF = "staff"
     UNKNOWN = "unknown"
 

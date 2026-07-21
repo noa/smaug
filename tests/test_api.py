@@ -339,36 +339,67 @@ class TestWriteCommandsAPI:
         assert res.get("success") is True
 
     def test_date_bounded_salary_crud(self, temp_api):
-        # 1. Update salary with start date (converts flat salary to schedule)
-        res = temp_api.set_salary("Smith, Jane", 200000, start="2026-07")
+        import datetime
+        import sys
+        from unittest.mock import patch
+
+        class MockDate(datetime.date):
+            @classmethod
+            def today(cls):
+                return cls(2026, 6, 15)
+
+        class MockDatetimeModule:
+            date = MockDate
+
+            def __getattr__(self, name):
+                return getattr(datetime, name)
+
+        with patch.dict(sys.modules, {"datetime": MockDatetimeModule()}):
+            # 1. Update salary with start date (converts flat salary to schedule)
+            res = temp_api.set_salary("Smith, Jane", 200000, start="2026-07")
+            assert res.get("success") is True
+
+            # 2. Update it again with identical start date to verify in-place update
+            res = temp_api.set_salary("Smith, Jane", 220000, start="2026-07")
+            assert res.get("success") is True
+
+            # Verify spend plan uses old salary ($180,000) in 2026-06 and new salary ($220,000) in 2026-07.
+            # Jane Smith has 10% effort on QUASAR.
+            plan = temp_api.spend_plan(["QUASAR"])
+            proj_06 = next(p for p in plan["projections"] if p["month"] == "2026-06")
+            proj_07 = next(p for p in plan["projections"] if p["month"] == "2026-07")
+
+            # Monthly salary difference should be (220k - 180k) / 12 * 0.10 = 333.33
+            diff = proj_07["salary"] - proj_06["salary"]
+            assert abs(diff - 333.33) < 0.02
+
+            # Verify personnel overview shows salaries list
+            overview = temp_api.personnel_overview()
+            person = next(p for p in overview["personnel"] if "Smith" in p["name"])
+            assert len(person["salaries"]) == 2
+
+            # 3. Add another time-bounded salary segment
+            res = temp_api.set_salary("Smith, Jane", 240000, start="2027-07", end="2028-07")
+            assert res.get("success") is True
+
+            # 4. Overwrite schedule with flat salary
+            res = temp_api.set_salary("Smith, Jane", 185000)
+            assert res.get("success") is True
+
+    def test_set_personnel_type(self, temp_api):
+        res = temp_api.set_personnel_type("Smith, Jane", "faculty")
         assert res.get("success") is True
+        assert res.get("name") == "Smith, Jane"
+        assert res.get("type") == "faculty"
 
-        # 2. Update it again with identical start date to verify in-place update
-        res = temp_api.set_salary("Smith, Jane", 220000, start="2026-07")
-        assert res.get("success") is True
+        # Check raw config to verify it was written
+        config_path = Path(temp_api.data_dir) / "projects" / "personnel_config.yaml"
+        with open(config_path) as f:
+            import yaml
 
-        # Verify spend plan uses old salary ($180,000) in 2026-06 and new salary ($220,000) in 2026-07.
-        # Jane Smith has 10% effort on QUASAR.
-        plan = temp_api.spend_plan(["QUASAR"])
-        proj_06 = next(p for p in plan["projections"] if p["month"] == "2026-06")
-        proj_07 = next(p for p in plan["projections"] if p["month"] == "2026-07")
-
-        # Monthly salary difference should be (220k - 180k) / 12 * 0.10 = 333.33
-        diff = proj_07["salary"] - proj_06["salary"]
-        assert abs(diff - 333.33) < 0.02
-
-        # Verify personnel overview shows salaries list
-        overview = temp_api.personnel_overview()
-        person = next(p for p in overview["personnel"] if "Smith" in p["name"])
-        assert len(person["salaries"]) == 2
-
-        # 3. Add another time-bounded salary segment
-        res = temp_api.set_salary("Smith, Jane", 240000, start="2027-07", end="2028-07")
-        assert res.get("success") is True
-
-        # 4. Overwrite schedule with flat salary
-        res = temp_api.set_salary("Smith, Jane", 185000)
-        assert res.get("success") is True
+            config = yaml.safe_load(f)
+        person = next(p for p in config["personnel"] if p["name"] == "Smith, Jane")
+        assert person["type"] == "faculty"
 
 
 class TestSpendPlanAPI:

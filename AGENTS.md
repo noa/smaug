@@ -74,6 +74,7 @@ smaug stopwork QUASAR --ceiling 450000
 smaug spend-plan QUASAR
 smaug spend-plan QUASAR --if "+phd@100%"           # Add a PhD student
 smaug spend-plan QUASAR --if "+postdoc@100%:85000"  # Add postdoc at $85k
+smaug spend-plan QUASAR --if "+masters@100%"        # Add hourly masters student
 smaug spend-plan QUASAR --if "Smith=50%"            # Change Smith's effort
 smaug spend-plan QUASAR --fy 2026                   # Fiscal year view
 smaug spend-plan QUASAR --compare --if "+phd@100%"  # Side-by-side comparison
@@ -134,6 +135,8 @@ smaug set-salary "Smith" 180000
 smaug set-end "Smith" QUASAR 2027-06
 smaug set-departure "Smith" 2028-01
 smaug add-person "New, Person" grad_student QUASAR 100% --salary 50000
+smaug add-person "Kim, Minjae" masters QUASAR 100%                      # Hourly masters (rate from rates.yaml)
+smaug add-person "Kim, Minjae" masters QUASAR 100% --salary 25 --hours 15  # Custom hourly rate and hours
 smaug add-project ATLAS --type sponsored --budget 500000
 smaug set-status ATLAS active
 smaug set-project-end QUASAR 2028-06
@@ -176,6 +179,8 @@ smaug setup show               # Show installation and setup status
 
 - **Project names** are short uppercase identifiers (e.g., QUASAR, NEXUS, ATLAS)
 - **Personnel names** use "Last, First" format but accept fuzzy matching
+- **Personnel types**: `faculty`, `postdoc`, `grad_student`/`phd`, `masters_student`/`masters`/`ms`, `staff`
+- **Masters students** are hourly (rate and hours from `rates.yaml`); JHU caps at 19.9 hrs/wk
 - **Spending reports are cumulative** — the latest report contains the total
 - **Effort** is expressed as a decimal (0.25) or percentage (25%) depending on context
 - Use `smaug list` first to see available projects and their short names

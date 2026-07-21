@@ -9,6 +9,7 @@ fringe_rates:
   postdoc: 0.211
   grad_student: 0.0
   part_time: 0.0825
+  masters_student: 0.0825
 
 grad_student_costs:
   stipend: 50000          # Annual PhD stipend
@@ -26,3 +27,4 @@ tuition_billing:
 undergrad_hourly: 15.0
 masters_hourly: 20.0
 masters_hours_per_week: 20
+masters_max_hours_per_week: 19.9  # JHU cap for hourly students

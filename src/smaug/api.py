@@ -892,6 +892,30 @@ class SmaugAPI:
             except Exception as e:
                 return self._sanitize_result({"error": str(e)})
 
+    def set_personnel_type(self, name: str, person_type: str) -> dict:
+        """Set or update personnel type for a person."""
+        from .cli._write_commands import cmd_set_type
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                cmd_set_type(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        name=name,
+                        type=person_type,
+                    ),
+                )
+                self._store = None  # Invalidate cache so reads reflect the write
+                return self._sanitize_result({"success": True, "name": name, "type": person_type})
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
     def add_personnel(
         self,
         name: str,

@@ -204,6 +204,12 @@ class TestStructuredResponses:
         assert res["success"] is True
         assert res["departure_date"] == "2028-06"
 
+    def test_set_personnel_type_returns_details(self, temp_api):
+        res = temp_api.set_personnel_type("Smith, Jane", "faculty")
+        assert res["success"] is True
+        assert res["name"] == "Smith, Jane"
+        assert res["type"] == "faculty"
+
 
 @pytest.fixture
 def anon_api(tmp_path):
