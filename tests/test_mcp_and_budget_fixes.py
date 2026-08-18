@@ -232,3 +232,114 @@ class TestAuditAliases:
             and ("Payroll Alias" in f.get("message", "") or "Payroll Alias" in f.get("person", ""))
         ]
         assert len(not_in_config) == 0
+
+
+class TestUnifiedBudgetResolution:
+    """Tests for unified budget resolution across tools."""
+
+    def test_budget_resolution_sources(self, temp_store_api):
+        from smaug.budget_resolution import resolve_project_budget
+
+        store = temp_store_api._get_store()
+        # Set up a contractual budget for a test project
+        project_dir = Path(temp_store_api.data_dir) / "projects" / "TEST_PROJ"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        budget_cfg = project_dir / "budget_config.yaml"
+        with open(budget_cfg, "w") as f:
+            yaml.dump(
+                {
+                    "award_id": "AWD-12345",
+                    "periods": [
+                        {
+                            "year": 1,
+                            "start": "2026-01",
+                            "end": "2026-12",
+                            "direct": 100000,
+                            "idc": 55000,
+                            "total": 155000,
+                        },
+                        {
+                            "year": 2,
+                            "start": "2027-01",
+                            "end": "2027-12",
+                            "direct": 100000,
+                            "idc": 55000,
+                            "total": 155000,
+                        },
+                    ],
+                },
+                f,
+            )
+
+        # Add project to store manifest
+        manifest_path = Path(temp_store_api.data_dir) / "projects" / "manifest.yaml"
+        with open(manifest_path) as f:
+            manifest = yaml.safe_load(f)
+        manifest.setdefault("projects", {})["TEST_PROJ"] = {
+            "name": "Test Project",
+            "pi": "Smith, Jane",
+            "status": "active",
+        }
+        with open(manifest_path, "w") as f:
+            yaml.dump(manifest, f)
+
+        store = temp_store_api._get_store()
+        store.load_manifest()
+
+        budget_amt, source = resolve_project_budget(store, "TEST_PROJ", temp_store_api.data_dir)
+        assert budget_amt == Decimal("310000")
+        assert source == "contractual_budget"
+
+    def test_budget_vs_actuals_with_contractual_yaml(self, temp_store_api):
+        # Create project with budget_config.yaml
+        project_dir = Path(temp_store_api.data_dir) / "projects" / "ARTS"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        budget_cfg = project_dir / "budget_config.yaml"
+        with open(budget_cfg, "w") as f:
+            yaml.dump(
+                {
+                    "award_id": "B661547",
+                    "periods": [
+                        {
+                            "year": 1,
+                            "start": "2024-02",
+                            "end": "2025-01",
+                            "direct": 500000,
+                            "idc": 275000,
+                            "total": 775000,
+                        },
+                        {
+                            "year": 2,
+                            "start": "2025-02",
+                            "end": "2026-01",
+                            "direct": 500000,
+                            "idc": 275000,
+                            "total": 775000,
+                        },
+                    ],
+                },
+                f,
+            )
+
+        manifest_path = Path(temp_store_api.data_dir) / "projects" / "manifest.yaml"
+        with open(manifest_path) as f:
+            manifest = yaml.safe_load(f)
+        manifest.setdefault("projects", {})["ARTS"] = {
+            "name": "ARTS Project",
+            "pi": "Andrews, Nicholas",
+            "status": "active",
+        }
+        with open(manifest_path, "w") as f:
+            yaml.dump(manifest, f)
+
+        # Re-create API to reload store
+        api = SmaugAPI(temp_store_api.data_dir)
+        res = api.budget_vs_actuals("ARTS")
+        assert "error" not in res
+        assert res["award_id"] == "B661547"
+        assert res["total_budget"] == 1550000.0
+
+        # dump_project should also return populated budget
+        dump = api.dump_project("ARTS")
+        assert dump["budget"] is not None
+        assert float(dump["budget"]["total_budget"]) == 1550000.0

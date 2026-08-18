@@ -342,6 +342,7 @@ def resolve_assignment_overlaps(assignments: list[Assignment]) -> list[Assignmen
     """Resolve overlapping assignments for the same project.
 
     Later assignments in the list (newer overrides) split/truncate earlier ones.
+    Adjacent segments with identical effort are collapsed back together.
     """
     resolved: list[Assignment] = []
     for cur in assignments:
@@ -371,7 +372,20 @@ def resolve_assignment_overlaps(assignments: list[Assignment]) -> list[Assignmen
 
         new_resolved.append(cur)
         resolved = new_resolved
-    return resolved
+
+    # Collapse adjacent contiguous segments with identical effort on the same project
+    collapsed: list[Assignment] = []
+    for a in resolved:
+        if not collapsed:
+            collapsed.append(a)
+            continue
+        prev = collapsed[-1]
+        if prev.project == a.project and prev.effort == a.effort and prev.end == a.start:
+            collapsed[-1] = Assignment(prev.project, prev.effort, prev.start, a.end)
+        else:
+            collapsed.append(a)
+
+    return collapsed
 
 
 def load_personnel_config(config_path: str | Path) -> tuple[Rates, list[PersonnelEntry]]:
@@ -844,19 +858,23 @@ def format_projection_report(projections: list[MonthlyProjection], project_id: s
 
 def optimize_mitigations(
     project_id: str,
-    config_path: str | Path,
+    config_path: Path | str,
     store: ProjectStore,
     target_months: int = 12,
+    budget_override: Decimal | None = None,
 ) -> list[dict]:
     """
-    Greedy budget mitigation optimizer.
-    Suggests travel freezes, expense pauses, and personnel effort cuts to extend the project's stop-work date.
+    Computes 3 specific mitigation packages to extend project runway:
+    - Plan A: Freeze planned travel + pause recurring expenses
+    - Plan B: Freeze travel/expenses + 25% reduction on all personnel on this project
+    - Plan C: Freeze travel/expenses + 50% reduction on all personnel on this project
 
     Returns:
         List of 3 styled mitigation plans (easy, moderate, deep).
     """
     from datetime import date
 
+    from .budget_resolution import resolve_project_budget
     from .cli._util import Anonymizer
 
     # 1. Compute baseline stop-work date
@@ -878,10 +896,17 @@ def optimize_mitigations(
         )
         # Calculate when remaining budget is exhausted
         project_data = store.get_project(project_id)
-        if not project_data or not project_data.project.total_budget:
+        if not project_data:
             return 12.0
 
-        remaining_budget = project_data.project.total_budget
+        resolved_budget = budget_override
+        if resolved_budget is None:
+            resolved_budget, _ = resolve_project_budget(store, project_id, store.data_dir)
+
+        if not resolved_budget or resolved_budget <= Decimal("0"):
+            return 12.0
+
+        remaining_budget = resolved_budget
         spent_so_far = Decimal("0")
         if project_data.spending:
             spent_so_far = project_data.spending[-1].total_spent
@@ -910,7 +935,10 @@ def optimize_mitigations(
 
     frozen_expenses = []
     for e in expense_items:
-        frozen_expenses.append(f"Pause expense: {e.description} (${e.amount:,.2f}/mo)")
+        if e.is_recurring:
+            frozen_expenses.append(f"Pause expense: {e.description} (${e.amount:,.2f}/mo)")
+        else:
+            frozen_expenses.append(f"Cancel expense: {e.description} (${e.amount:,.2f})")
 
     easy_months = get_stop_work_months(original_personnel, [], [])
     plans.append(

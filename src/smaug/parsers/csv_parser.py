@@ -74,10 +74,20 @@ class CSVReportParser(ReportParser):
                         month=int(row.get("month", 0)),
                         total_spent=_to_decimal(row.get("total_spent", "0")),
                         total_committed=_to_decimal(row.get("total_committed", "0")),
+                        total_month=_to_decimal(row.get("total_month", "0"))
+                        if "total_month" in row
+                        else None,
                         salary_spent=_to_decimal(row.get("salary_spent", "0")),
                         fringe_spent=_to_decimal(row.get("fringe_spent", "0")),
                         tuition_spent=_to_decimal(row.get("tuition_spent", "0")),
+                        insurance_spent=_to_decimal(row.get("insurance_spent", "0")),
+                        service_center_spent=_to_decimal(row.get("service_center_spent", "0")),
                         travel_spent=_to_decimal(row.get("travel_spent", "0")),
+                        travel_foreign_spent=_to_decimal(row.get("travel_foreign_spent", "0")),
+                        supplies_spent=_to_decimal(row.get("supplies_spent", "0")),
+                        equipment_spent=_to_decimal(row.get("equipment_spent", "0")),
+                        subcontracts_spent=_to_decimal(row.get("subcontracts_spent", "0")),
+                        consultant_spent=_to_decimal(row.get("consultant_spent", "0")),
                         other_spent=_to_decimal(row.get("other_spent", "0")),
                         indirect_spent=_to_decimal(row.get("indirect_spent", "0")),
                     )
@@ -111,10 +121,20 @@ class CSVReportParser(ReportParser):
                         month=int(row.get("month", 0)),
                         total_spent=_to_decimal(row.get("total_spent", "0")),
                         total_committed=_to_decimal(row.get("total_committed", "0")),
+                        total_month=_to_decimal(row.get("total_month", "0"))
+                        if "total_month" in row
+                        else None,
                         salary_spent=_to_decimal(row.get("salary_spent", "0")),
                         fringe_spent=_to_decimal(row.get("fringe_spent", "0")),
                         tuition_spent=_to_decimal(row.get("tuition_spent", "0")),
+                        insurance_spent=_to_decimal(row.get("insurance_spent", "0")),
+                        service_center_spent=_to_decimal(row.get("service_center_spent", "0")),
                         travel_spent=_to_decimal(row.get("travel_spent", "0")),
+                        travel_foreign_spent=_to_decimal(row.get("travel_foreign_spent", "0")),
+                        supplies_spent=_to_decimal(row.get("supplies_spent", "0")),
+                        equipment_spent=_to_decimal(row.get("equipment_spent", "0")),
+                        subcontracts_spent=_to_decimal(row.get("subcontracts_spent", "0")),
+                        consultant_spent=_to_decimal(row.get("consultant_spent", "0")),
                         other_spent=_to_decimal(row.get("other_spent", "0")),
                         indirect_spent=_to_decimal(row.get("indirect_spent", "0")),
                     )

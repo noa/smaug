@@ -11,6 +11,7 @@ import pytest
 
 from smaug.sponsored_report_parsing import (
     clean_text_to_decimal,
+    parse_commitment_page,
     parse_employee_type,
     parse_personnel_page,
     parse_sponsored_summary,
@@ -229,3 +230,177 @@ class TestParsePersonnelPage:
         page = _mock_page("This is a regular page with no salary data.")
         result = parse_personnel_page(page)
         assert result == []
+
+
+# --- Tests for expanded report parsing capabilities ---
+
+SYNTHETIC_JULY_REPORT_PAGE1 = """\
+Johns Hopkins University Sponsored Financial Report
+Grant: 145891 - IARPA ARTS PI For Andrews, Nicholas
+Sponsored Program: 90109289 - B661547
+Budget Begin Date: 02/06/2024
+Budget End Date: 03/31/2027
+Grant Project End Date: 03/31/2027
+Grantor Code: LLNL
+F&A Rate: 55.50% MTDC
+
+Expenditures Budget July 2026
+
+Salaries & Wages 25000.00 450000.00 12000.00
+Fringe Benefits 5500.00 99000.00 2640.00
+Tuition & Fees 0.00 26668.00 0.00
+Total Student Health 0.00 8730.00 0.00
+Total Service Center 271.69 1500.00 0.00
+Travel Domestic 1200.00 12500.00 0.00
+Travel Foreign 4286.60 4286.60 0.00
+Supplies & Materials 4848.99 4848.99 0.00
+Capital Equipment 0.00 15000.00 0.00
+Subcontracts 10000.00 80000.00 0.00
+Consultant Services 1000.00 5000.00 0.00
+Other Expenses 800.00 9500.00 200.00
+
+Total Expenditures 2473206.00 72571.08 850000.00 14840.00 864840.00
+Total Indirect Costs 0.00 19663.80 142500.00 0.00 142500.00
+
+Budget Utilized: 35.0%
+Sponsored Revenue 1619296.12 107213.11
+"""
+
+
+class TestParseExpandedSummary:
+    @pytest.fixture
+    def summary(self):
+        page = _mock_page(SYNTHETIC_JULY_REPORT_PAGE1)
+        return parse_sponsored_summary(page)
+
+    def test_total_month(self, summary):
+        assert summary["total_month"] == Decimal("72571.08")
+
+    def test_travel_foreign(self, summary):
+        assert summary["travel_foreign_spent"] == Decimal("4286.60")
+        assert summary["travel_foreign_month"] == Decimal("4286.60")
+
+    def test_supplies(self, summary):
+        assert summary["supplies_spent"] == Decimal("4848.99")
+        assert summary["supplies_month"] == Decimal("4848.99")
+
+    def test_equipment(self, summary):
+        assert summary["equipment_spent"] == Decimal("15000.00")
+        assert summary["equipment_month"] == Decimal("0.00")
+
+    def test_subcontracts(self, summary):
+        assert summary["subcontracts_spent"] == Decimal("80000.00")
+        assert summary["subcontracts_month"] == Decimal("10000.00")
+
+    def test_consultant(self, summary):
+        assert summary["consultant_spent"] == Decimal("5000.00")
+        assert summary["consultant_month"] == Decimal("1000.00")
+
+    def test_award_metadata(self, summary):
+        from datetime import date
+
+        assert summary["budget_start_date"] == date(2024, 2, 6)
+        assert summary["budget_end_date"] == date(2027, 3, 31)
+        assert summary["grant_end_date"] == date(2027, 3, 31)
+        assert summary["grantor_code"] == "LLNL"
+        assert summary["stated_idc_rate"] == Decimal("55.50")
+
+    def test_revenue(self, summary):
+        assert summary["total_revenue_received"] == Decimal("1619296.12")
+        assert summary["revenue_month"] == Decimal("107213.11")
+        assert summary["funded_ceiling"] == Decimal("1619296.12")
+
+
+SYNTHETIC_JULY_PERSONNEL_PAGE = """\
+Salary Report July 2026
+Grant: 145891 - IARPA ARTS
+
+G/L 600120 - SAL-FAC TLC / PtInstSl
+Andrews, Nicholas Doc 1000001 03/15/2026 to 07/31/2026 17,673.00
+Total for Andrews, Nicholas 17,673.00
+
+G/L 600010 - FACULTY SALARIES
+Wiesner, Matthew Doc 1000002 01/15/2026 to 06/30/2026 4,382.52
+Total for Wiesner, Matthew 4,382.52
+
+G/L 600030 - STUDENT GRAD STIPEND
+Sisman, Berrak Doc 1000003 04/15/2026 to 06/30/2026 2,275.02
+Total for Sisman, Berrak 2,275.02
+"""
+
+
+class TestParseDetailedPersonnelPage:
+    @pytest.fixture
+    def personnel(self):
+        page = _mock_page(SYNTHETIC_JULY_PERSONNEL_PAGE)
+        return parse_personnel_page(page, report_period="July 2026", report_project_id="145891")
+
+    def test_pay_periods_and_gl(self, personnel):
+        from datetime import date
+
+        from smaug.models import EmployeeType
+
+        by_name = {p.person_name: p for p in personnel}
+
+        andrews = by_name["Andrews, Nicholas"]
+        assert andrews.salary_amount == Decimal("17673.00")
+        assert andrews.gl_account == "600120"
+        assert andrews.wage_type == "SAL-FAC TLC / PtInstSl"
+        assert andrews.pay_period_start == date(2026, 3, 15)
+        assert andrews.pay_period_end == date(2026, 7, 31)
+
+        wiesner = by_name["Wiesner, Matthew"]
+        assert wiesner.salary_amount == Decimal("4382.52")
+        assert wiesner.gl_account == "600010"
+        assert wiesner.pay_period_start == date(2026, 1, 15)
+        assert wiesner.pay_period_end == date(2026, 6, 30)
+
+        sisman = by_name["Sisman, Berrak"]
+        assert sisman.salary_amount == Decimal("2275.02")
+        assert sisman.employee_type == EmployeeType.GRAD_STUDENT
+        assert sisman.pay_period_start == date(2026, 4, 15)
+        assert sisman.pay_period_end == date(2026, 6, 30)
+
+
+SYNTHETIC_COMMITMENT_PAGE = """\
+Salary Commitment Report July 2026
+Grant: 145891 - IARPA ARTS
+
+G/L 600030 - STUDENT GRAD STIPEND
+Ulgen, Ege Doc 2000001 08/01/2026 03/31/2027 33333.36 0.00 18500.02
+Zhao, Kevin Doc 2000002 08/01/2026 03/31/2027 33333.36 0.00 18500.02
+Student, Three Doc 2000003 08/01/2026 03/31/2027 33333.36 0.00 18500.02
+Student, Four Doc 2000004 08/01/2026 03/31/2027 33333.36 0.00 18500.02
+
+G/L 600010 - FACULTY SALARIES
+Andrews, Nicholas Doc 2000005 08/01/2026 03/31/2027 15000.00 4725.00 10947.38
+Wiesner, Matthew Doc 2000006 08/01/2026 03/31/2027 5000.00 1575.00 3649.13
+"""
+
+
+class TestParseCommitmentPage:
+    @pytest.fixture
+    def commitments(self):
+        page = _mock_page(SYNTHETIC_COMMITMENT_PAGE)
+        return parse_commitment_page(page, report_period="July 2026", report_project_id="145891")
+
+    def test_grad_students_encumbered(self, commitments):
+        from datetime import date
+
+        from smaug.models import EmployeeType
+
+        names = {c.person_name for c in commitments}
+        assert "Ulgen, Ege" in names
+        assert "Zhao, Kevin" in names
+        assert "Student, Three" in names
+        assert "Student, Four" in names
+        assert len(commitments) == 6
+
+        by_name = {c.person_name: c for c in commitments}
+        ulgen = by_name["Ulgen, Ege"]
+        assert ulgen.employee_type == EmployeeType.GRAD_STUDENT
+        assert ulgen.salary_committed == Decimal("33333.36")
+        assert ulgen.fringe_committed == Decimal("0.00")
+        assert ulgen.idc_committed == Decimal("18500.02")
+        assert ulgen.encumbrance_start == date(2026, 8, 1)
+        assert ulgen.encumbrance_end == date(2027, 3, 31)

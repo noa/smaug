@@ -831,10 +831,9 @@ def cmd_budget_vs_actuals(store: ProjectStore, args) -> None:
         return
 
     # Load contractual budget
-    budget_config_path = None
-    if data.project.budget_dir:
-        budget_config_path = Path(data.project.budget_dir) / "budget_config.yaml"
+    from ..budget_resolution import resolve_budget_config_path
 
+    budget_config_path = resolve_budget_config_path(store, project_id, args.data_dir)
     if not budget_config_path or not budget_config_path.exists():
         print(f"Error: No contractual budget config found for {project_id}")
         print(f"Expected: {budget_config_path}")
