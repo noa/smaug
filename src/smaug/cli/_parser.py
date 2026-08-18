@@ -157,6 +157,11 @@ def main():
     setend_parser.add_argument("name", help="Person name or index number")
     setend_parser.add_argument("project", help="Project short name")
     setend_parser.add_argument("date", help="End date as YYYY-MM")
+    setend_parser.add_argument(
+        "--start",
+        "-s",
+        help="Optional start date (YYYY-MM) to disambiguate which assignment segment to modify",
+    )
     setend_parser.set_defaults(func=cmd_set_end)
 
     # set-departure command

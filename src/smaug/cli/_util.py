@@ -323,15 +323,20 @@ def resolve_personnel_name(
         - On error: (None, error_message)
         - On allow_missing with no match: (original_input, None)
     """
-    # If anonymization is active, perform bidirectional resolution
-    if Anonymizer.enabled:
-        cleaned_query = name_or_idx.lower().replace(" ", "")
-        for anon_name, real_name in Anonymizer._anon_to_real.items():
-            if anon_name.lower().replace(" ", "") == cleaned_query:
-                name_or_idx = real_name
-                break
+    if not name_or_idx:
+        return None, "Empty personnel name provided"
 
-    # Check if it's a number (index)
+    # 1. Exact match against personnel list (case-sensitive)
+    if name_or_idx in personnel_list:
+        return name_or_idx, None
+
+    # 2. Exact match against personnel list (case-insensitive)
+    query_lower = name_or_idx.lower()
+    exact_ci = [p for p in personnel_list if p.lower() == query_lower]
+    if len(exact_ci) == 1:
+        return exact_ci[0], None
+
+    # 3. Check if it's a number (1-based index)
     if name_or_idx.isdigit():
         idx = int(name_or_idx)
         if 1 <= idx <= len(personnel_list):
@@ -339,24 +344,42 @@ def resolve_personnel_name(
         else:
             return None, f"Index {idx} out of range (1-{len(personnel_list)})"
 
-    # Check aliases (case-insensitive)
+    # 4. Check aliases (case-insensitive)
+    resolved_query = name_or_idx
     if aliases:
-        query_lower = name_or_idx.lower()
         for alias, real_name in aliases.items():
             if alias.lower() == query_lower:
-                # Verify the real name exists
                 if real_name in personnel_list:
                     return real_name, None
-                # Alias points to unknown person, try fuzzy on real_name
+                exact_alias_ci = [p for p in personnel_list if p.lower() == real_name.lower()]
+                if len(exact_alias_ci) == 1:
+                    return exact_alias_ci[0], None
+                resolved_query = real_name
                 break
 
-    # Try exact match first
-    if name_or_idx in personnel_list:
-        return name_or_idx, None
+    # 5. Check anonymization mapping if active
+    if Anonymizer.enabled:
+        cleaned_query = name_or_idx.lower().replace(" ", "")
+        for anon_name, real_name in Anonymizer._anon_to_real.items():
+            if anon_name.lower().replace(" ", "") == cleaned_query:
+                if real_name in personnel_list:
+                    return real_name, None
+                exact_anon_ci = [p for p in personnel_list if p.lower() == real_name.lower()]
+                if len(exact_anon_ci) == 1:
+                    return exact_anon_ci[0], None
+                resolved_query = real_name
+                break
 
-    # Fuzzy match: case-insensitive substring search
-    query = name_or_idx.lower()
-    matches = [p for p in personnel_list if query in p.lower()]
+    # 6. Check exact match with resolved_query
+    if resolved_query in personnel_list:
+        return resolved_query, None
+    exact_res_ci = [p for p in personnel_list if p.lower() == resolved_query.lower()]
+    if len(exact_res_ci) == 1:
+        return exact_res_ci[0], None
+
+    # 7. Fuzzy match: case-insensitive substring search strictly in personnel_list
+    fuzzy_query = resolved_query.lower()
+    matches = [p for p in personnel_list if fuzzy_query in p.lower()]
 
     if len(matches) == 1:
         return matches[0], None
@@ -364,7 +387,7 @@ def resolve_personnel_name(
         match_list = "\n".join(f"  - {m}" for m in matches)
         return None, f"Multiple personnel matching '{name_or_idx}':\n{match_list}"
 
-    # No matches
+    # 8. No matches
     if allow_missing:
         return name_or_idx, None
     return None, f"No personnel found matching '{name_or_idx}'"

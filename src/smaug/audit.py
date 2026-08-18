@@ -120,6 +120,7 @@ def audit_project_period(
     personnel_config: list[PersonnelEntry],
     actual_allocations: list[EffortAllocation],
     threshold_pct: Decimal = Decimal("10"),
+    aliases: dict[str, str] | None = None,
 ) -> list[AuditFinding]:
     """
     Audit a single project for a single period.
@@ -132,11 +133,20 @@ def audit_project_period(
         personnel_config: Expected personnel from config
         actual_allocations: Actual allocations from PDF reports
         threshold_pct: Variance threshold to flag (default 10%)
+        aliases: Optional dict mapping payroll names to config names
 
     Returns:
         List of AuditFinding objects
     """
     findings = []
+
+    def resolve_name(raw_name: str) -> str:
+        if aliases:
+            query = raw_name.lower().strip()
+            for alias, real_name in aliases.items():
+                if alias.lower().strip() == query:
+                    return real_name
+        return raw_name
 
     # Build lookup of actual amounts by normalized name
     actual_by_name: dict[str, Decimal] = {}
@@ -145,7 +155,8 @@ def audit_project_period(
             continue
         if alloc.period != period:
             continue
-        name_key = _normalize_name(alloc.person_name)
+        canon_name = resolve_name(alloc.person_name)
+        name_key = _normalize_name(canon_name)
         actual_by_name[name_key] = actual_by_name.get(name_key, Decimal("0")) + alloc.salary_amount
 
     # Build lookup of expected amounts
@@ -185,7 +196,7 @@ def audit_project_period(
             # Check if they have ANY assignment (even 0%) listed
             person_entry = None
             for p in personnel_config:
-                if _normalize_name(p.name) == name:
+                if _normalize_name(p.name) == name or _normalize_name(resolve_name(p.name)) == name:
                     person_entry = p
                     break
 
@@ -244,6 +255,7 @@ def audit_project(
     periods: list[str] | None = None,
     months_back: int = 3,
     threshold_pct: Decimal = Decimal("10"),
+    aliases: dict[str, str] | None = None,
 ) -> AuditReport:
     """
     Run audit for a project across multiple periods.
@@ -255,6 +267,7 @@ def audit_project(
         periods: Specific periods to audit (or None for auto-detect)
         months_back: Number of months to look back (default 3)
         threshold_pct: Variance threshold to flag
+        aliases: Optional dict mapping payroll names to config names
 
     Returns:
         AuditReport with findings
@@ -303,6 +316,7 @@ def audit_project(
             personnel_config=personnel,
             actual_allocations=actual_allocations,
             threshold_pct=threshold_pct,
+            aliases=aliases,
         )
         all_findings.extend(findings)
 

@@ -756,6 +756,7 @@ def cmd_audit(store: ProjectStore, args) -> None:
     # The API's audit() method is used by MCP; CLI uses the richer formatter.
     threshold = Decimal(str(args.threshold))
     use_color = Colors.enabled()
+    aliases = load_aliases(args.data_dir)
 
     for project_id in project_ids:
         report = audit_project(
@@ -764,6 +765,7 @@ def cmd_audit(store: ProjectStore, args) -> None:
             actual_allocations=all_allocations,
             months_back=args.months,
             threshold_pct=threshold,
+            aliases=aliases,
         )
 
         # Skip projects with no findings unless verbose

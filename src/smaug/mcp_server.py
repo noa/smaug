@@ -684,16 +684,24 @@ def main():
         return json.dumps(api.set_salary(name, salary, start=start, end=end), indent=2)
 
     @mcp.tool()
-    def set_assignment_end(name: str, project: str, end_date: str) -> str:
+    def set_assignment_end(
+        name: str,
+        project: str,
+        end_date: str,
+        start_date: str | None = None,
+    ) -> str:
         """Set or clear the end date for a person's project assignment.
 
         Args:
             name: Personnel name (supports fuzzy/nickname resolution).
             project: Project short name.
             end_date: End date as YYYY-MM, or 'none' to clear.
+            start_date: Optional start date as YYYY-MM to disambiguate which segment to modify.
         """
         api = SmaugAPI(data_dir, anonymize=anonymize)
-        return json.dumps(api.set_assignment_end(name, project, end_date), indent=2)
+        return json.dumps(
+            api.set_assignment_end(name, project, end_date, start_date=start_date), indent=2
+        )
 
     @mcp.tool()
     def set_departure(name: str, departure_date: str) -> str:
@@ -993,6 +1001,9 @@ def main():
     @mcp.tool()
     def set_project_end(project: str, end_date: str) -> str:
         """Set the contractual end date for a project.
+
+        Validates the new end date against contractual budget periods, expenses,
+        travel items, and personnel assignments, returning any warnings.
 
         Args:
             project: Project short name.

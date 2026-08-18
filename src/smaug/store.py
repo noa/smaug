@@ -131,6 +131,8 @@ class ProjectStore:
         for short_name, project in self._projects.items():
             if project.budget_dir:
                 budget_dir = Path(project.budget_dir)
+                if not budget_dir.is_absolute():
+                    budget_dir = self.data_dir / budget_dir
                 if budget_dir.exists():
                     # Find budget Excel files
                     for xlsx_file in budget_dir.glob("*[Bb]udget*.xlsx"):
@@ -500,6 +502,9 @@ class ProjectStore:
                 "type": data.project.project_type.value,
                 "grant_number": data.project.grant_number,
                 "award_id": data.project.award_id,
+                "total_budget": str(data.project.total_budget)
+                if data.project.total_budget is not None
+                else None,
             },
             "budget": None,
             "spending": [],
@@ -515,6 +520,13 @@ class ProjectStore:
                     {"category": line.category, "year": line.year, "amount": str(line.amount)}
                     for line in data.budget.lines
                 ],
+            }
+        elif data.project.total_budget is not None:
+            result["budget"] = {
+                "total_direct_costs": None,
+                "total_indirect_costs": None,
+                "total_budget": str(data.project.total_budget),
+                "lines": [],
             }
 
         for r in data.spending:
