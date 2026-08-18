@@ -197,11 +197,24 @@ api = SmaugAPI("/path/to/data")
 projects = api.list_projects(status="active")
 forecast = api.stopwork_forecast("QUASAR")
 plan = api.spend_plan(["QUASAR"], add_personnel=[{"type": "phd", "effort_pct": 100}])
+health = api.health_check()
+gaps = api.report_gaps()
+mitigations = api.optimize_budget("QUASAR", target_months=12)
 ```
 
 ## MCP Server
 
-Smaug ships an MCP server for agent tool integration. The easiest way to register it:
+Smaug ships a full-featured MCP server exposing both read and write tools for AI agents:
+
+- **Analysis & Forecasting**: `list_projects`, `project_status`, `spending_report`, `spending_projection`, `stopwork_forecast`, `spend_plan` (with what-if modeling), `audit_spending`, `proposal_budget`, `dump_project`
+- **Operations & Integrity**: `health_check`, `report_gaps`, `optimize_budget`, `list_budget_periods`, `budget_vs_actuals`, `funding_summary`, `personnel_overview`
+- **Personnel & Effort Management**: `set_personnel_effort`, `remove_personnel_effort`, `set_salary`, `set_personnel_type`, `set_assignment_end`, `set_departure`, `add_personnel` (supports faculty, postdoc, PhD, and hourly masters students with `--hours` cap)
+- **Project & Budget Lifecycle**: `add_project`, `set_project_status`, `set_project_budget`, `set_project_end`, `add_budget_period`, `set_budget_period`
+- **Rates Configuration**: `set_fringe`, `set_idc`, `set_tuition`, `set_healthcare`
+- **Items & Notes**: `add_travel_item`, `add_expense_item`, `edit_expense_item`, `remove_expense_item`, `list_project_notes`, `show_project_note`, `add_project_note`, `remove_project_note`
+- **Importing**: `import_report`, `import_invoice`
+
+The easiest way to register it with Claude Code:
 
 ```bash
 smaug setup mcp              # Register with Claude Code (project scope)
