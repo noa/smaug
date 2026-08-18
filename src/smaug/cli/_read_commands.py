@@ -182,6 +182,137 @@ def cmd_status(store: ProjectStore, args) -> None:
             )
 
 
+def cmd_state_of_play(store: ProjectStore, args) -> None:
+    """Show comprehensive state of play summary for a project."""
+    import json
+
+    from ..api import SmaugAPI
+
+    api = SmaugAPI(args.data_dir)
+    result = api.project_state_of_play(args.project)
+
+    if "error" in result:
+        print(result["error"])
+        return
+
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2))
+        return
+
+    proj = result["project"]
+    status_label = result["health_status"].upper()
+    if result["health_status"] == "healthy":
+        status_colored = color(f"[{status_label}]", Colors.GREEN + Colors.BOLD)
+    elif result["health_status"] == "critical":
+        status_colored = color(f"[{status_label}]", Colors.RED + Colors.BOLD)
+    else:
+        status_colored = color(f"[{status_label}]", Colors.YELLOW + Colors.BOLD)
+
+    print(f"\n=== State of Play: {proj['name']} ({proj['id']}) {status_colored} ===")
+    print(
+        f"PI: {proj['pi']}  |  Type: {proj['type'].capitalize()}  |  Status: {proj['status'].capitalize()}"
+    )
+    if proj.get("grant_number"):
+        print(f"Grant #: {proj['grant_number']}  |  Award ID: {proj.get('award_id') or 'N/A'}")
+    if proj.get("end_date"):
+        print(f"End Date: {proj['end_date']}")
+
+    # Warnings
+    warnings = result.get("warnings", [])
+    if warnings:
+        print(f"\n{color('--- Actionable Warnings & Alerts ---', Colors.YELLOW + Colors.BOLD)}")
+        for w in warnings:
+            if "Critical" in w or "exceeded" in w.lower() or "precedes" in w.lower():
+                print(f"  {color('🚨', Colors.RED)} {color(w, Colors.RED)}")
+            else:
+                print(f"  {color('⚠️', Colors.YELLOW)} {color(w, Colors.YELLOW)}")
+    else:
+        print(f"\n{color('✓ All checks clear (no active warnings)', Colors.GREEN)}")
+
+    # Spending overview
+    so = result.get("spending_overview", {})
+    b = so.get("budget", {})
+    act = so.get("actuals", {})
+    br = so.get("burn_rate", {})
+
+    print(f"\n{color('--- Financial Overview ---', Colors.BOLD)}")
+    if b.get("total_budget"):
+        print(f"Total Budget:          ${b['total_budget']:>12,.2f}")
+    if b.get("funded_ceiling"):
+        print(f"Funded Ceiling:        ${b['funded_ceiling']:>12,.2f}")
+    if act.get("total_spent") is not None:
+        rep_str = f" ({act.get('latest_report_period')})" if act.get("latest_report_period") else ""
+        print(f"Total Spent{rep_str:<12}: ${act['total_spent']:>12,.2f}")
+        print(f"Total Committed:       ${act['total_committed']:>12,.2f}")
+        print(f"Total Spent+Committed: ${act['total_spent_and_committed']:>12,.2f}")
+    if act.get("remaining_balance") is not None:
+        rem_str = color_remaining(act["remaining_balance"], b.get("total_budget") or 0)
+        pct_str = f"({act['pct_remaining']:.1f}%)" if act.get("pct_remaining") is not None else ""
+        print(f"Remaining Balance:     {rem_str:>12} {pct_str}")
+    if br.get("current_monthly_burn"):
+        print(f"Current Monthly Burn:  ${br['current_monthly_burn']:>12,.2f}")
+    if br.get("projected_average_monthly_burn"):
+        print(f"Projected Avg Burn:    ${br['projected_average_monthly_burn']:>12,.2f}/mo")
+
+    # Categories
+    cats = act.get("category_breakdown", {})
+    if cats and any(cats.values()):
+        print(f"\n{color('--- Spending Categories (Cumulative) ---', Colors.BOLD)}")
+        for cat_name, cat_val in cats.items():
+            if cat_val > 0:
+                pct = act.get("category_percentages", {}).get(cat_name, 0.0)
+                print(
+                    f"  {cat_name.replace('_', ' ').capitalize():<22} ${cat_val:>12,.2f}  ({pct:>4.1f}%)"
+                )
+
+    # Forecast & Runway
+    fc = result.get("forecast", {})
+    if fc.get("stop_work_month") or fc.get("months_to_stopwork") is not None:
+        print(f"\n{color('--- Runway & Forecast ---', Colors.BOLD)}")
+        if fc.get("stop_work_month"):
+            print(
+                f"Stop-Work Date:        {fc['stop_work_month']} ({fc.get('stop_work_day') or 'end of month'})"
+            )
+        if fc.get("months_to_stopwork") is not None:
+            print(f"Runway Remaining:      {fc['months_to_stopwork']} months")
+
+    # Personnel
+    pers = result.get("personnel", {})
+    allocs = pers.get("current_allocations", [])
+    if allocs:
+        print(f"\n{color('--- Current Personnel on Project ---', Colors.BOLD)}")
+        print(
+            f"Active Team: {pers.get('active_headcount', 0)} people  |  Total Effort: {pers.get('total_effort_fte', 0.0):.2f} FTE"
+        )
+        print(f"{'Name':<24} {'Role':<14} {'Effort':>8} {'Monthly Cost':>14} {'End Date':>10}")
+        print("-" * 74)
+        for a in allocs:
+            end_str = a.get("assignment_end") or "None"
+            print(
+                f"{a['name']:<24} {a['type']:<14} {a['effort_pct']:>7.1f}% ${a['monthly_total_cost']:>12,.2f} {end_str:>10}"
+            )
+
+    # Commitments & Plans
+    cp = result.get("commitments_and_plans", {})
+    travels = cp.get("travel_items", [])
+    expenses = cp.get("expense_items", [])
+    if travels or expenses:
+        print(f"\n{color('--- Commitments & Planned Items ---', Colors.BOLD)}")
+        if travels:
+            print("Planned Travel:")
+            for t in travels:
+                print(
+                    f"  • {t.get('description', '')} ({t.get('date', 'N/A')}): ${t.get('amount', 0.0):,.2f}"
+                )
+        if expenses:
+            print("Planned Expenses:")
+            for e in expenses:
+                print(
+                    f"  • {e.get('description', '')} [{e.get('category', 'Other')}]: ${e.get('amount', 0.0):,.2f}"
+                )
+    print()
+
+
 def cmd_report(store: ProjectStore, args) -> None:
     """Show detailed spending report for a project."""
     from ..api import SmaugAPI

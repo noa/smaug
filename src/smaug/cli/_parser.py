@@ -33,6 +33,7 @@ from ._read_commands import (
     cmd_list,
     cmd_personnel,
     cmd_project,
+    cmd_state_of_play,
     cmd_status,
 )
 from ._setup import cmd_setup
@@ -89,6 +90,16 @@ def main():
     status_parser = subparsers.add_parser("status", help="Show project status")
     status_parser.add_argument("project", help="Project short name (e.g., ARTS)")
     status_parser.set_defaults(func=cmd_status)
+
+    # state-of-play command
+    sop_parser = subparsers.add_parser(
+        "state-of-play",
+        aliases=["play"],
+        help="Show comprehensive state-of-play summary for a project",
+    )
+    sop_parser.add_argument("project", help="Project short name (e.g., QUASAR)")
+    sop_parser.add_argument("--json", action="store_true", help="Output raw JSON summary")
+    sop_parser.set_defaults(func=cmd_state_of_play)
 
     # report command (subcommand group)
     report_parser = subparsers.add_parser("report", help="Manage spending reports")

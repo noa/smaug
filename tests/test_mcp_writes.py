@@ -353,6 +353,15 @@ class TestNewOperationalAndWriteTools:
         assert "warnings" in res
         assert "project_health" in res
 
+    def test_project_state_of_play(self, temp_api):
+        res = temp_api.project_state_of_play("QUASAR")
+        assert "project" in res
+        assert "health_status" in res
+        assert "spending_overview" in res
+        assert "personnel" in res
+        assert "forecast" in res
+        assert "commitments_and_plans" in res
+
     def test_optimize_budget(self, temp_api):
         res = temp_api.optimize_budget("QUASAR", target_months=12)
         assert res["project"] == "QUASAR"

@@ -238,6 +238,520 @@ class SmaugAPI:
 
         return results
 
+    def project_state_of_play(self, project: str) -> dict:
+        """Comprehensive project-level 'state of play' summary.
+
+        Synthesizes metadata, actionable warnings (e.g. out-of-date sponsored reports,
+        report gaps, missing invoices, over-committed staff, runway shortfalls),
+        spending overview & burn rates, forward forecast & stop-work projections,
+        current and projected personnel effort, and commitments/plans.
+
+        Args:
+            project: Project short name (e.g. 'QUASAR').
+
+        Returns:
+            Dict containing: project, health_status, warning_count, warnings,
+            spending_overview, forecast, personnel, commitments_and_plans.
+        """
+        import contextlib
+        from datetime import datetime
+
+        from .cli._util import Anonymizer
+        from .models import ProjectStatus
+        from .projections import is_active, load_personnel_config, project_monthly_costs
+
+        store = self._get_store()
+        data = store.get_project(project)
+        if not data:
+            return self._sanitize_result({"error": f"Project not found: {project}"})
+
+        now = datetime.now()
+        today = date.today()
+        warnings: list[str] = []
+
+        # 1. Project Metadata
+        proj_meta = {
+            "id": data.project.short_name,
+            "name": data.project.name,
+            "pi": Anonymizer.anonymize(data.project.pi),
+            "type": data.project.project_type.value,
+            "status": data.project.status.value,
+            "grant_number": data.project.grant_number,
+            "sponsored_program": data.project.sponsored_program,
+            "award_id": data.project.award_id,
+            "funded_program": data.project.funded_program,
+            "fund_center": data.project.fund_center,
+            "start_date": _date_str(data.project.start_date),
+            "end_date": _date_str(data.project.end_date),
+        }
+
+        # 2. Config & store items
+        config_path = self._config_path()
+        rates = None
+        from .projections import PersonnelEntry
+
+        config_personnel: list[PersonnelEntry] = []
+        if config_path.exists():
+            with contextlib.suppress(Exception):
+                rates, config_personnel = load_personnel_config(config_path)
+
+        store.load_travel_config()
+        store.load_purchases_config()
+        travel_items = store.get_project_travel(project)
+        expense_items = store.get_project_expenses(project)
+        invoices = store.get_project_invoices(project)
+
+        # 3. Spending Overview & Budget
+        total_budget = Decimal("0")
+        direct_budget = None
+        indirect_budget = None
+        if data.budget and data.budget.total_budget > 0:
+            total_budget = data.budget.total_budget
+            direct_budget = _dec(data.budget.total_direct_costs)
+            indirect_budget = _dec(data.budget.total_indirect_costs)
+        elif data.project.total_budget and data.project.total_budget > 0:
+            total_budget = data.project.total_budget
+
+        latest = data.spending[-1] if data.spending else None
+        funded_ceiling = latest.funded_ceiling if latest and latest.funded_ceiling else None
+
+        total_spent = latest.total_spent if latest else Decimal("0")
+        total_committed = latest.total_committed if latest else Decimal("0")
+        total_spent_and_committed = (
+            latest.total_spent_and_committed
+            if latest and latest.total_spent_and_committed > 0
+            else (total_spent + total_committed)
+        )
+
+        remaining_balance = (
+            total_budget - total_spent_and_committed if total_budget > Decimal("0") else None
+        )
+        pct_spent = (
+            float(total_spent / total_budget * 100)
+            if total_budget > Decimal("0") and total_spent
+            else 0.0
+        )
+        pct_remaining = (
+            round(float(remaining_balance / total_budget * 100), 1)
+            if total_budget > Decimal("0") and remaining_balance is not None
+            else None
+        )
+
+        # Categories
+        category_breakdown = {}
+        category_percentages = {}
+        if latest:
+            cats = {
+                "salary": _dec(latest.salary_spent),
+                "fringe": _dec(latest.fringe_spent),
+                "tuition": _dec(latest.tuition_spent),
+                "insurance": _dec(latest.insurance_spent),
+                "service_center": _dec(latest.service_center_spent),
+                "travel": _dec(latest.travel_spent),
+                "other": _dec(latest.other_spent),
+                "indirect": _dec(latest.indirect_spent),
+            }
+            category_breakdown = {k: (v if v is not None else 0.0) for k, v in cats.items()}
+            if total_spent > Decimal("0"):
+                category_percentages = {
+                    k: round(v / float(total_spent) * 100, 1) for k, v in category_breakdown.items()
+                }
+
+        # 4. Report currency & gap warnings
+        months_since_last_report = None
+        is_out_of_date = False
+        latest_report_period = None
+        latest_report_year_month = None
+
+        if latest:
+            latest_report_period = latest.period
+            latest_report_year_month = f"{latest.year}-{latest.month:02d}"
+            months_since_last_report = (now.year - latest.year) * 12 + (now.month - latest.month)
+            if months_since_last_report > 2:
+                is_out_of_date = True
+                warnings.append(
+                    f"Latest spending report is {months_since_last_report} months out of date ({latest.period}). Current month: {now.strftime('%B %Y')}."
+                )
+
+            # Check for report gaps
+            periods = {(r.year, r.month) for r in data.spending}
+            min_p = min(periods)
+            max_p = max(periods)
+            end_p = (now.year, now.month) if (now.year, now.month) > max_p else max_p
+            y, m = min_p
+            missing_months = []
+            while (y, m) <= end_p:
+                if (y, m) not in periods:
+                    missing_months.append(datetime(y, m, 1).strftime("%B %Y"))
+                m += 1
+                if m > 12:
+                    m = 1
+                    y += 1
+            if missing_months:
+                preview = ", ".join(missing_months[:4])
+                if len(missing_months) > 4:
+                    preview += f", and {len(missing_months) - 4} more"
+                warnings.append(f"Missing monthly spending report gaps: {preview}.")
+        elif (
+            data.project.project_type.value == "sponsored" and data.project.status.value == "active"
+        ):
+            warnings.append(f"No spending reports found for active sponsored project '{project}'.")
+
+        # Invoices warnings for sponsored projects
+        if data.project.project_type.value == "sponsored" and data.project.status.value == "active":
+            if not invoices:
+                warnings.append(f"No sponsor invoices found on file for '{project}'.")
+            else:
+                inv_periods = {(inv.period_end.year, inv.period_end.month) for inv in invoices}
+                min_inv = min(inv_periods)
+                end_inv = (now.year, now.month)
+                y, m = min_inv
+                missing_invs = []
+                while (y, m) <= end_inv:
+                    if (y, m) not in inv_periods:
+                        missing_invs.append(datetime(y, m, 1).strftime("%B %Y"))
+                    m += 1
+                    if m > 12:
+                        m = 1
+                        y += 1
+                if missing_invs:
+                    preview = ", ".join(missing_invs[:4])
+                    if len(missing_invs) > 4:
+                        preview += f", and {len(missing_invs) - 4} more"
+                    warnings.append(f"Missing invoice gaps: {preview}.")
+
+        # Budget limit & threshold warnings
+        if total_budget > Decimal("0"):
+            if total_spent_and_committed > total_budget:
+                overage = total_spent_and_committed - total_budget
+                warnings.append(
+                    f"Budget exceeded: Total spent and committed (${float(total_spent_and_committed):,.2f}) exceeds total budget (${float(total_budget):,.2f}) by ${float(overage):,.2f}."
+                )
+            elif pct_remaining is not None and pct_remaining < 10.0 and pct_remaining >= 0:
+                rem_str = (
+                    f"${float(remaining_balance):,.2f}" if remaining_balance is not None else "N/A"
+                )
+                warnings.append(
+                    f"Low budget warning: Only {pct_remaining:.1f}% remaining ({rem_str})."
+                )
+
+        if funded_ceiling and total_spent_and_committed > funded_ceiling:
+            overage = total_spent_and_committed - funded_ceiling
+            warnings.append(
+                f"Funded ceiling exceeded: Total spent and committed (${float(total_spent_and_committed):,.2f}) exceeds current ceiling (${float(funded_ceiling):,.2f}) by ${float(overage):,.2f}."
+            )
+
+        # 5. Burn Rate & Projections
+        current_burn = Decimal("0")
+        projected_12m_total = Decimal("0")
+        projections_12m = []
+
+        if rates and config_personnel and data.project.status == ProjectStatus.ACTIVE:
+            with contextlib.suppress(Exception):
+                cur = today.replace(day=1)
+                for i in range(12):
+                    mp = project_monthly_costs(
+                        project,
+                        rates,
+                        config_personnel,
+                        cur.year,
+                        cur.month,
+                        travel_items,
+                        expense_items,
+                    )
+                    if i == 0:
+                        current_burn = mp.total
+                    projected_12m_total += mp.total
+                    projections_12m.append(
+                        {
+                            "month": f"{cur.year}-{cur.month:02d}",
+                            "headcount": len(mp.personnel),
+                            "total_cost": _dec(mp.total),
+                            "personnel": [
+                                {"name": Anonymizer.anonymize(pname), "amount": _dec(pamt)}
+                                for pname, pamt in mp.personnel
+                            ],
+                        }
+                    )
+                    if cur.month == 12:
+                        cur = cur.replace(year=cur.year + 1, month=1)
+                    else:
+                        cur = cur.replace(month=cur.month + 1)
+
+        projected_avg_monthly_burn = (
+            round(float(projected_12m_total / Decimal("12")), 2) if projected_12m_total > 0 else 0.0
+        )
+
+        # Historical average monthly burn
+        historical_avg_monthly_burn = None
+        if data.spending and len(data.spending) >= 1:
+            first_r = data.spending[0]
+            last_r = data.spending[-1]
+            span_months = (last_r.year - first_r.year) * 12 + (last_r.month - first_r.month) + 1
+            if span_months > 0 and last_r.total_spent > 0:
+                historical_avg_monthly_burn = round(float(last_r.total_spent) / span_months, 2)
+
+        # 6. Stop-work forecast & Runway
+        stop_month = None
+        stop_day = None
+        months_to_stopwork = None
+        runway_status = "ok"
+
+        stopwork_res = self.stopwork_forecast(project)
+        if "error" not in stopwork_res:
+            stop_month = stopwork_res.get("stop_month")
+            stop_day = stopwork_res.get("stop_day")
+            if stop_month:
+                sy, sm = int(stop_month.split("-")[0]), int(stop_month.split("-")[1])
+                months_to_stopwork = (sy - now.year) * 12 + (sm - now.month)
+                if months_to_stopwork <= 3:
+                    runway_status = "critical"
+                    warnings.append(
+                        f"Critical runway alert: Funding is projected to run out in {max(0, months_to_stopwork)} months ({stop_month})."
+                    )
+                elif months_to_stopwork <= 6:
+                    runway_status = "at_risk"
+
+                if data.project.end_date:
+                    proj_end = data.project.end_date
+                    if (sy, sm) < (proj_end.year, proj_end.month):
+                        shortfall = (proj_end.year - sy) * 12 + (proj_end.month - sm)
+                        runway_status = "stop_work_before_end"
+                        warnings.append(
+                            f"Projected stop-work date ({stop_month}) precedes contractual project end date ({_date_str(proj_end)}) by {shortfall} months."
+                        )
+
+        # 7. Personnel Allocations & Transitions
+        tracker = store.get_personnel_tracker()
+        current_allocations = []
+        upcoming_transitions = []
+        total_active_fte = Decimal("0")
+
+        for p in config_personnel:
+            total_effort_all = sum(
+                a.effort for a in p.assignments if is_active(a, now.year, now.month, p.departure)
+            )
+            is_overcommitted = total_effort_all > Decimal("1.0")
+
+            # Check if person has assignment on this project
+            project_assignments = [a for a in p.assignments if a.project == project]
+            if not project_assignments:
+                continue
+
+            active_this_month = False
+            for a in project_assignments:
+                if is_active(a, now.year, now.month, p.departure):
+                    active_this_month = True
+                    total_active_fte += a.effort
+
+                # Check transitions
+                if a.end:
+                    months_to_end = (a.end.year - now.year) * 12 + (a.end.month - now.month)
+                    if 0 <= months_to_end <= 12:
+                        upcoming_transitions.append(
+                            {
+                                "person": Anonymizer.anonymize(p.name),
+                                "event": "assignment_end",
+                                "date": _date_str(a.end),
+                                "description": f"{Anonymizer.anonymize(p.name)}'s assignment on {project} ends in {_date_str(a.end)}.",
+                            }
+                        )
+                    if data.project.end_date and a.end < data.project.end_date:
+                        warnings.append(
+                            f"Personnel '{Anonymizer.anonymize(p.name)}' assignment on {project} ends on {_date_str(a.end)} before project end date ({_date_str(data.project.end_date)})."
+                        )
+
+            if p.departure:
+                months_to_dep = (p.departure.year - now.year) * 12 + (p.departure.month - now.month)
+                if 0 <= months_to_dep <= 12:
+                    upcoming_transitions.append(
+                        {
+                            "person": Anonymizer.anonymize(p.name),
+                            "event": "departure",
+                            "date": _date_str(p.departure),
+                            "description": f"{Anonymizer.anonymize(p.name)} is scheduled to depart university in {_date_str(p.departure)}.",
+                        }
+                    )
+
+            if is_overcommitted:
+                warnings.append(
+                    f"Personnel '{Anonymizer.anonymize(p.name)}' is over-committed at {float(total_effort_all * 100):.0f}% total effort across projects."
+                )
+
+            # Spending from reports for this person on this project
+            by_project = tracker.get_person_by_project(p.name)
+            person_spent = float(by_project.get(project, Decimal("0")))
+
+            # Monthly costs for this person
+            first_assign = project_assignments[0]
+            effort_pct = float(first_assign.effort * 100)
+
+            # Calculate monthly salary and fringe
+            m_sal = (p.annual_salary / 12) * first_assign.effort
+            fringe_rate = (
+                rates.fringe.get(p.person_type, Decimal("0.34")) if rates else Decimal("0.34")
+            )
+            if p.person_type == "masters_student":
+                fringe_rate = (
+                    rates.fringe.get("masters_student", Decimal("0.0825"))
+                    if now.month in (6, 7, 8) and rates
+                    else Decimal("0.0")
+                )
+            m_fringe = m_sal * fringe_rate
+            m_tuition = Decimal("0")
+            m_insurance = Decimal("0")
+            if rates:
+                if p.person_type == "grad_student":
+                    m_tuition = (rates.tuition_per_semester * 2 / 12) * first_assign.effort
+                    m_insurance = (rates.insurance_annual / 12) * first_assign.effort
+                elif p.person_type == "masters_student":
+                    if p.include_tuition:
+                        m_tuition = (
+                            rates.masters_tuition_per_semester * 2 / 12
+                        ) * first_assign.effort
+                    if p.include_insurance:
+                        m_insurance = (rates.insurance_annual / 12) * first_assign.effort
+
+            idc_rate = rates.idc if rates else Decimal("0.55")
+            m_total = (
+                m_sal
+                + m_fringe
+                + m_tuition
+                + m_insurance
+                + (m_sal + m_fringe + m_insurance) * idc_rate
+            )
+
+            current_allocations.append(
+                {
+                    "name": Anonymizer.anonymize(p.name),
+                    "type": p.person_type,
+                    "effort_pct": effort_pct,
+                    "annual_salary": _dec(p.annual_salary),
+                    "monthly_direct_salary": _dec(m_sal),
+                    "monthly_fringe": _dec(m_fringe),
+                    "monthly_tuition_and_insurance": _dec(m_tuition + m_insurance),
+                    "monthly_total_cost": _dec(m_total),
+                    "assignment_start": _date_str(first_assign.start),
+                    "assignment_end": _date_str(first_assign.end),
+                    "departure": _date_str(p.departure),
+                    "total_effort_across_projects": round(float(total_effort_all * 100), 1),
+                    "is_overcommitted": is_overcommitted,
+                    "total_spent_to_date": round(person_spent, 2),
+                    "is_active_now": active_this_month,
+                }
+            )
+
+        # 8. Audit Findings & Parse Warnings
+        with contextlib.suppress(Exception):
+            audit_res = self.audit(project=project, months=6, threshold=15.0)
+            for f in audit_res.get("findings", []):
+                if f.get("severity") in ("error", "warning"):
+                    warnings.append(f"Audit finding ({f.get('period')}): {f.get('message')}")
+
+        for pw in store.get_parse_warnings():
+            if project.lower() in pw.file.lower() or project.lower() in pw.message.lower():
+                warnings.append(f"Parse warning in {pw.file}: {pw.message}")
+
+        # Remove duplicates from warnings while preserving order
+        seen = set()
+        deduped_warnings = []
+        for w in warnings:
+            if w not in seen:
+                seen.add(w)
+                deduped_warnings.append(w)
+
+        # Overall health status
+        if any(
+            "Critical" in w or "exceeded" in w.lower() or "precedes" in w.lower()
+            for w in deduped_warnings
+        ):
+            health_status = "critical"
+        elif len(deduped_warnings) > 0:
+            health_status = "warning"
+        else:
+            health_status = "healthy"
+
+        # 9. Commitments & Plans
+        budget_periods_res = self.list_budget_periods(project)
+        budget_periods_list = (
+            budget_periods_res.get("periods", []) if "error" not in budget_periods_res else []
+        )
+        notes_list = self.list_project_notes(project)
+
+        return self._sanitize_result(
+            {
+                "project": proj_meta,
+                "health_status": health_status,
+                "warning_count": len(deduped_warnings),
+                "warnings": deduped_warnings,
+                "spending_overview": {
+                    "budget": {
+                        "total_budget": _dec(total_budget) if total_budget > 0 else None,
+                        "direct_budget": direct_budget,
+                        "indirect_budget": indirect_budget,
+                        "funded_ceiling": _dec(funded_ceiling),
+                    },
+                    "actuals": {
+                        "latest_report_period": latest_report_period,
+                        "latest_report_year_month": latest_report_year_month,
+                        "months_since_last_report": months_since_last_report,
+                        "is_out_of_date": is_out_of_date,
+                        "total_spent": _dec(total_spent),
+                        "total_committed": _dec(total_committed),
+                        "total_spent_and_committed": _dec(total_spent_and_committed),
+                        "remaining_balance": _dec(remaining_balance),
+                        "pct_spent": round(pct_spent, 1),
+                        "pct_remaining": pct_remaining,
+                        "category_breakdown": category_breakdown,
+                        "category_percentages": category_percentages,
+                    },
+                    "burn_rate": {
+                        "current_monthly_burn": _dec(current_burn),
+                        "projected_average_monthly_burn": projected_avg_monthly_burn,
+                        "historical_average_monthly_burn": historical_avg_monthly_burn,
+                    },
+                },
+                "forecast": {
+                    "stop_work_month": stop_month,
+                    "stop_work_day": stop_day,
+                    "months_to_stopwork": months_to_stopwork,
+                    "project_end_date": _date_str(data.project.end_date),
+                    "runway_status": runway_status,
+                },
+                "personnel": {
+                    "active_headcount": sum(1 for p in current_allocations if p["is_active_now"]),
+                    "total_effort_fte": round(float(total_active_fte), 2),
+                    "current_allocations": current_allocations,
+                    "projected_effort": projections_12m,
+                    "upcoming_transitions": upcoming_transitions,
+                },
+                "commitments_and_plans": {
+                    "travel_items": [t.to_dict() for t in travel_items],
+                    "expense_items": [e.to_dict() for e in expense_items],
+                    "budget_periods": budget_periods_list,
+                    "invoices": {
+                        "count": len(invoices),
+                        "latest_period_end": _date_str(invoices[-1].period_end)
+                        if invoices
+                        else None,
+                        "total_billed": _dec(
+                            sum((inv.cumulative_expense for inv in invoices[-1:]), Decimal("0"))
+                        )
+                        if invoices
+                        else 0.0,
+                    },
+                    "notes": {
+                        "count": len(notes_list),
+                        "recent_notes": notes_list[:5],
+                    },
+                },
+            }
+        )
+
+    def state_of_play(self, project: str) -> dict:
+        """Alias for project_state_of_play."""
+        return self.project_state_of_play(project)
+
     def project_status(self, project: str) -> dict:
         """Detailed budget vs. actuals for a single project.
 
@@ -468,6 +982,9 @@ class SmaugAPI:
         elif data.budget and data.budget.total_budget:
             effective_ceiling = data.budget.total_budget
             ceiling_source = "budget"
+        elif data.project and data.project.total_budget:
+            effective_ceiling = data.project.total_budget
+            ceiling_source = "manifest"
         else:
             return {"error": "No funded ceiling or budget found"}
 

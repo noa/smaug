@@ -82,6 +82,7 @@ The MCP server exposes the core functionality of the Smaug engine as JSON-schema
 | Tool Name | CLI Equivalent | Description |
 |:---|:---|:---|
 | `smaug_list_projects` | `smaug list` | Lists all projects in the workspace. |
+| `smaug_project_state_of_play` | `smaug state-of-play` | Returns comprehensive 360-degree project overview including warnings, spending, personnel, and runway. |
 | `smaug_project_status` | `smaug status` | Returns detailed status, metadata, and actuals for a specific project. |
 | `smaug_stopwork_forecast` | `smaug stopwork` | Forecasts the date when funding is projected to run out. |
 | `smaug_spend_plan` | `smaug spend-plan` | Calculates a monthly spend plan, including hypothetical what-if scenarios (e.g. adding personnel). |

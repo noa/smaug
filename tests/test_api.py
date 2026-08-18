@@ -7,8 +7,21 @@ from pathlib import Path
 import pytest
 
 from smaug.api import SmaugAPI
+from smaug.cli._util import Anonymizer
 
 EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
+
+
+@pytest.fixture(autouse=True)
+def reset_anonymizer():
+    """Ensure Anonymizer is reset before/after each test."""
+    Anonymizer.enabled = False
+    Anonymizer._real_to_anon = {}
+    Anonymizer._anon_to_real = {}
+    yield
+    Anonymizer.enabled = False
+    Anonymizer._real_to_anon = {}
+    Anonymizer._anon_to_real = {}
 
 
 @pytest.fixture
@@ -446,3 +459,67 @@ class TestOptimize:
         for p in plans:
             assert "extended_stop_work_months" in p
             assert "extension" in p
+
+
+class TestProjectStateOfPlay:
+    def test_valid_project(self, api):
+        res = api.project_state_of_play("QUASAR")
+        assert "project" in res
+        assert "health_status" in res
+        assert "warning_count" in res
+        assert "warnings" in res
+        assert "spending_overview" in res
+        assert "forecast" in res
+        assert "personnel" in res
+        assert "commitments_and_plans" in res
+
+        assert res["project"]["id"] == "QUASAR"
+        assert res["project"]["type"] == "sponsored"
+        assert res["project"]["status"] == "active"
+        assert res["spending_overview"]["budget"]["total_budget"] == 1500000.0
+        assert res["personnel"]["active_headcount"] > 0
+        assert res["personnel"]["total_effort_fte"] > 0
+        assert len(res["personnel"]["current_allocations"]) >= 4
+        assert len(res["personnel"]["projected_effort"]) == 12
+
+    def test_state_of_play_alias(self, api):
+        res1 = api.project_state_of_play("QUASAR")
+        res2 = api.state_of_play("QUASAR")
+        assert res1 == res2
+
+    def test_invalid_project(self, api):
+        res = api.project_state_of_play("NONEXISTENT")
+        assert "error" in res
+
+    def test_discretionary_project(self, api):
+        res = api.project_state_of_play("STARTUP")
+        assert res["project"]["id"] == "STARTUP"
+        assert res["project"]["type"] == "discretionary"
+        assert res["health_status"] == "healthy"
+        assert res["spending_overview"]["actuals"]["total_spent"] == 0.0
+
+    def test_proposed_project(self, api):
+        res = api.project_state_of_play("ATLAS")
+        assert res["project"]["id"] == "ATLAS"
+        assert res["project"]["status"] == "proposed"
+        assert res["spending_overview"]["actuals"]["total_spent"] == 0.0
+
+    def test_warnings_out_of_date_reports(self, api):
+        res = api.project_state_of_play("QUASAR")
+        assert isinstance(res["warnings"], list)
+        assert res["warning_count"] == len(res["warnings"])
+        # Report is from March 2026, which is > 2 months before current date
+        assert any("out of date" in w.lower() for w in res["warnings"])
+
+    def test_json_serializable(self, api):
+        res = api.project_state_of_play("QUASAR")
+        json_str = json.dumps(res)
+        assert isinstance(json_str, str)
+
+    def test_anonymization(self):
+        anon_api = SmaugAPI(EXAMPLES_DIR, anonymize=True)
+        res = anon_api.project_state_of_play("QUASAR")
+        # Ensure json string doesn't leak unmasked names
+        json_str = json.dumps(res)
+        assert isinstance(json_str, str)
+        assert res["project"]["pi"] != "Jane Smith"
