@@ -54,6 +54,10 @@ smaug list --status proposed        # Filter by lifecycle status
 # Detailed status for one project
 smaug status QUASAR
 
+# Comprehensive "state of play" summary (warnings, financials, personnel, forecast)
+smaug state-of-play QUASAR
+smaug state-of-play QUASAR --json
+
 # Spending history from parsed reports
 smaug report list QUASAR
 
@@ -197,6 +201,7 @@ api = SmaugAPI("/path/to/data")
 projects = api.list_projects(status="active")
 forecast = api.stopwork_forecast("QUASAR")
 plan = api.spend_plan(["QUASAR"], add_personnel=[{"type": "phd", "effort_pct": 100}])
+state = api.project_state_of_play("QUASAR")
 health = api.health_check()
 gaps = api.report_gaps()
 mitigations = api.optimize_budget("QUASAR", target_months=12)
@@ -206,7 +211,7 @@ mitigations = api.optimize_budget("QUASAR", target_months=12)
 
 Smaug ships a full-featured MCP server exposing both read and write tools for AI agents:
 
-- **Analysis & Forecasting**: `list_projects`, `project_status`, `spending_report`, `spending_projection`, `stopwork_forecast`, `spend_plan` (with what-if modeling), `audit_spending`, `proposal_budget`, `dump_project`
+- **Analysis & Forecasting**: `list_projects`, `project_state_of_play`, `project_status`, `spending_report`, `spending_projection`, `stopwork_forecast`, `spend_plan` (with what-if modeling), `audit_spending`, `proposal_budget`, `dump_project`
 - **Operations & Integrity**: `health_check`, `report_gaps`, `optimize_budget`, `list_budget_periods`, `budget_vs_actuals`, `funding_summary`, `personnel_overview`
 - **Personnel & Effort Management**: `set_personnel_effort`, `remove_personnel_effort`, `set_salary`, `set_personnel_type`, `set_assignment_end`, `set_departure`, `add_personnel` (supports faculty, postdoc, PhD, and hourly masters students with `--hours` cap)
 - **Project & Budget Lifecycle**: `add_project`, `set_project_status`, `set_project_budget`, `set_project_end`, `add_budget_period`, `set_budget_period`

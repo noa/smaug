@@ -119,6 +119,26 @@ def main():
         return json.dumps(api.list_projects(status=status), indent=2)
 
     @mcp.tool()
+    def project_state_of_play(project: str) -> str:
+        """Get a comprehensive 'state of play' summary for a specific project.
+
+        Synthesizes a 360-degree view of the project including:
+        - Metadata and lifecycle status
+        - Actionable warnings (out-of-date sponsored reports, report/invoice gaps,
+          over-committed personnel, low runway, stop-work preceding contractual end)
+        - Spending overview (budget, actuals, category breakdown, burn rate)
+        - Stop-work forecast and runway status
+        - Personnel allocations (current team FTE, costs, 12-month projections,
+          and upcoming transitions/departures)
+        - Commitments & plans (travel items, expense items, contractual periods, invoices, notes)
+
+        Args:
+            project: Project short name (e.g., 'QUASAR').
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.project_state_of_play(project), indent=2)
+
+    @mcp.tool()
     def project_status(project: str) -> str:
         """Get detailed budget vs. actuals for a single project.
 

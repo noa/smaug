@@ -118,6 +118,9 @@ smaug --data-dir examples list
 # List all projects with budget overview
 smaug list
 
+# Comprehensive state of play summary (warnings, financials, personnel, runway)
+smaug state-of-play QUASAR
+
 # Detailed status for a project
 smaug status QUASAR
 
