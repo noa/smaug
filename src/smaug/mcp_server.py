@@ -34,7 +34,51 @@ def main():
         )
         sys.exit(1)
 
+    from pydantic import BaseModel, Field
+
     from .api import SmaugAPI
+
+    class HypotheticalPerson(BaseModel):
+        """Specification for adding a hypothetical person to a spend plan."""
+
+        type: str = Field(
+            description="Personnel role: 'phd'/'grad_student', 'masters_student'/'masters'/'ms', 'postdoc', 'faculty', 'staff'"
+        )
+        effort_pct: float = Field(description="Effort percentage (e.g. 100 for 100%, 50 for 50%)")
+        salary: float | None = Field(
+            default=None,
+            description="Optional annual salary in dollars. For masters, annualized equivalent ($/hr * hrs/wk * 52).",
+        )
+        start_date: str | None = Field(
+            default=None,
+            description="Optional start date as YYYY-MM",
+        )
+        end_date: str | None = Field(
+            default=None,
+            description="Optional end date as YYYY-MM",
+        )
+
+    class EffortOverride(BaseModel):
+        """Specification for overriding effort of an existing person in a spend plan."""
+
+        name: str = Field(description="Person name or alias (fuzzy matching supported)")
+        effort_pct: float = Field(
+            description="New effort percentage (e.g. 50 for 50%, 0 to remove)"
+        )
+        start_date: str | None = Field(
+            default=None,
+            description="Optional start date as YYYY-MM",
+        )
+        end_date: str | None = Field(
+            default=None,
+            description="Optional end date as YYYY-MM",
+        )
+
+    class ProposalPISpec(BaseModel):
+        """Named investigator specification for a proposal budget."""
+
+        name: str = Field(description="Person name or alias matching personnel_config.yaml")
+        effort_pct: float = Field(description="Effort percentage (e.g. 10 for 10%)")
 
     mcp = FastMCP(
         "smaug",
@@ -137,13 +181,14 @@ def main():
         projects: list[str],
         months: int | None = None,
         fy: int | None = None,
-        add_personnel: list[dict] | None = None,
-        override_effort: list[dict] | None = None,
+        add_personnel: list[HypotheticalPerson | dict] | None = None,
+        override_effort: list[EffortOverride | dict] | None = None,
     ) -> str:
         """Generate a monthly spend plan with optional what-if scenarios.
 
         Use add_personnel to model hiring new people:
           [{"type": "phd", "effort_pct": 100},
+           {"type": "masters_student", "effort_pct": 100, "salary": 20800},
            {"type": "postdoc", "effort_pct": 100, "salary": 85000}]
 
         Use override_effort to change existing allocations:
@@ -157,12 +202,22 @@ def main():
             override_effort: List of effort overrides for existing personnel.
         """
         api = SmaugAPI(data_dir, anonymize=anonymize)
+        add_p = (
+            [p.model_dump() if hasattr(p, "model_dump") else p for p in add_personnel]
+            if add_personnel
+            else None
+        )
+        over_e = (
+            [e.model_dump() if hasattr(e, "model_dump") else e for e in override_effort]
+            if override_effort
+            else None
+        )
         result = api.spend_plan(
             projects=projects,
             months=months,
             fy=fy,
-            add_personnel=add_personnel,
-            override_effort=override_effort,
+            add_personnel=add_p,
+            override_effort=over_e,
         )
         return json.dumps(result, indent=2)
 
@@ -188,7 +243,7 @@ def main():
     def proposal_budget(
         phd: int = 0,
         years: int = 3,
-        pi: list[dict] | None = None,
+        pi: list[ProposalPISpec | dict] | None = None,
         masters: int = 0,
         travel: float = 0,
         compute: float = 0,
@@ -213,9 +268,10 @@ def main():
             escalation: Annual salary escalation % (default 3.0).
         """
         api = SmaugAPI(data_dir, anonymize=anonymize)
+        pi_specs = [p.model_dump() if hasattr(p, "model_dump") else p for p in pi] if pi else None
         return json.dumps(
             api.proposal_budget(
-                pi=pi,
+                pi=pi_specs,
                 phd=phd,
                 masters=masters,
                 years=years,
@@ -240,6 +296,55 @@ def main():
         """
         api = SmaugAPI(data_dir, anonymize=anonymize)
         return json.dumps(api.dump_project(project), indent=2)
+
+    @mcp.tool()
+    def report_gaps() -> str:
+        """Check for missing monthly spending reports across all projects.
+
+        Returns list of missing months for each project, or confirmation that
+        reporting is up to date. Useful before running spend projections.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.report_gaps(), indent=2)
+
+    @mcp.tool()
+    def health_check() -> str:
+        """Run comprehensive data integrity checks across all projects, reports, and personnel.
+
+        Checks for missing report coverage, un-invoiced months, parse warnings,
+        and personnel effort over-commitments (>100% effort across projects).
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.health_check(), indent=2)
+
+    @mcp.tool()
+    def optimize_budget(project: str, target_months: int = 12) -> str:
+        """Suggest greedy budget mitigation strategies to extend stop-work dates.
+
+        Evaluates 3 tiers of mitigation levers:
+        - Plan A: Non-personnel cuts (freeze travel, pause recurring expenses)
+        - Plan B: Moderate cuts (travel/expense freeze + 25% effort reductions)
+        - Plan C: Deep cuts (travel/expense freeze + 50% effort reductions)
+
+        Args:
+            project: Project short name (e.g. 'QUASAR').
+            target_months: Target extension in months (default 12).
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.optimize_budget(project, target_months=target_months), indent=2)
+
+    @mcp.tool()
+    def list_budget_periods(project: str) -> str:
+        """List contractual budget periods and funding increments for a project.
+
+        Shows each contract year's start/end dates, total funding, direct costs,
+        and indirect costs (IDC).
+
+        Args:
+            project: Project short name.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.list_budget_periods(project), indent=2)
 
     # ------------------------------------------------------------------
     # Resources (read-only context)
@@ -586,20 +691,40 @@ def main():
 
     @mcp.tool()
     def add_personnel(
-        name: str, person_type: str, project: str, effort_pct: float, salary: int | None = None
+        name: str,
+        person_type: str,
+        project: str,
+        effort_pct: float,
+        salary: int | None = None,
+        hours: float | None = None,
+        start: str | None = None,
+        end: str | None = None,
     ) -> str:
         """Add new personnel and assign them to a project.
 
         Args:
             name: New personnel name (Last, First).
-            person_type: Type of employee ('faculty', 'postdoc', 'grad_student', 'staff').
+            person_type: Type of employee ('faculty', 'postdoc', 'grad_student'/'phd', 'masters_student'/'masters'/'ms', 'staff').
             project: Project short name.
-            effort_pct: Initial effort percentage (e.g., 100 for 100%).
-            salary: Optional annual salary override. Required for non-student roles.
+            effort_pct: Initial effort percentage (e.g., 100 for 100%, 25 for 25%).
+            salary: Optional annual salary override (or hourly rate for masters_student). Required for non-student roles.
+            hours: Optional hours per week for hourly personnel (default from rates.yaml, max 19.9 for masters).
+            start: Optional start date as YYYY-MM.
+            end: Optional end date as YYYY-MM.
         """
         api = SmaugAPI(data_dir, anonymize=anonymize)
         return json.dumps(
-            api.add_personnel(name, person_type, project, effort_pct, salary), indent=2
+            api.add_personnel(
+                name=name,
+                person_type=person_type,
+                project=project,
+                effort_pct=effort_pct,
+                salary=salary,
+                hours=hours,
+                start=start,
+                end=end,
+            ),
+            indent=2,
         )
 
     @mcp.tool()
@@ -720,6 +845,182 @@ def main():
         """
         api = SmaugAPI(data_dir, anonymize=anonymize)
         return json.dumps(api.remove_expense_item(project, description), indent=2)
+
+    @mcp.tool()
+    def add_budget_period(
+        project: str,
+        year: int,
+        total: float,
+        start: str,
+        end: str,
+        direct: float | None = None,
+        idc: float | None = None,
+    ) -> str:
+        """Add a contractual budget period (funding increment) to a project.
+
+        Args:
+            project: Project short name.
+            year: Contract year number (e.g. 1, 2, 3).
+            total: Total funding amount for the period in dollars.
+            start: Start date as YYYY-MM or YYYY-MM-DD.
+            end: End date as YYYY-MM or YYYY-MM-DD.
+            direct: Optional direct costs portion. If omitted, auto-split using institutional IDC rate.
+            idc: Optional indirect costs portion. If omitted, auto-split using institutional IDC rate.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.add_budget_period(
+                project=project,
+                year=year,
+                total=total,
+                start=start,
+                end=end,
+                direct=direct,
+                idc=idc,
+            ),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def set_budget_period(
+        project: str,
+        year: int,
+        total: float | None = None,
+        direct: float | None = None,
+        idc: float | None = None,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> str:
+        """Modify an existing contractual budget period.
+
+        Args:
+            project: Project short name.
+            year: Contract year number.
+            total: New total funding amount in dollars.
+            direct: New direct costs portion.
+            idc: New indirect costs portion.
+            start: Optional new start date as YYYY-MM or YYYY-MM-DD.
+            end: Optional new end date as YYYY-MM or YYYY-MM-DD.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.set_budget_period(
+                project=project,
+                year=year,
+                total=total,
+                direct=direct,
+                idc=idc,
+                start=start,
+                end=end,
+            ),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def add_project(
+        project: str,
+        description: str | None = None,
+        project_type: str = "sponsored",
+        budget: float | None = None,
+        grant: str | None = None,
+        status: str = "active",
+    ) -> str:
+        """Add a new project to the manifest.
+
+        Args:
+            project: Project short name / identifier (e.g. 'ATLAS').
+            description: Optional descriptive name or title.
+            project_type: 'sponsored' (grant-funded) or 'discretionary'.
+            budget: Optional initial budget total.
+            grant: Optional grant or award number.
+            status: Initial lifecycle status: 'active' (default), 'proposed', 'accepted', 'completed'.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.add_project(
+                project=project,
+                description=description,
+                project_type=project_type,
+                budget=budget,
+                grant=grant,
+                status=status,
+            ),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def set_project_status(project: str, status: str) -> str:
+        """Set the lifecycle status of a project.
+
+        Args:
+            project: Project short name.
+            status: Target status: 'proposed', 'accepted', 'active', 'completed'.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_project_status(project, status), indent=2)
+
+    @mcp.tool()
+    def set_project_budget(project: str, budget: float) -> str:
+        """Set or update the total contractual/award budget for a project.
+
+        Args:
+            project: Project short name.
+            budget: Total budget amount in dollars.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_project_budget(project, budget), indent=2)
+
+    @mcp.tool()
+    def set_project_end(project: str, end_date: str) -> str:
+        """Set the contractual end date for a project.
+
+        Args:
+            project: Project short name.
+            end_date: End date as YYYY-MM.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_project_end(project, end_date), indent=2)
+
+    @mcp.tool()
+    def set_fringe(person_type: str, rate: float) -> str:
+        """Set institutional fringe benefit rate for a personnel type in rates.yaml.
+
+        Args:
+            person_type: Personnel type ('faculty', 'postdoc', 'grad_student', 'masters_student', 'staff', 'part_time').
+            rate: Fringe rate as decimal (e.g. 0.0825) or percentage (8.25).
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_fringe(person_type, rate), indent=2)
+
+    @mcp.tool()
+    def set_idc(rate: float) -> str:
+        """Set institutional IDC (Indirect Cost / F&A) rate in rates.yaml.
+
+        Args:
+            rate: IDC rate as decimal (e.g. 0.55) or percentage (55).
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_idc(rate), indent=2)
+
+    @mcp.tool()
+    def set_tuition(amount: float) -> str:
+        """Set per-semester graduate student tuition rate in rates.yaml.
+
+        Args:
+            amount: Tuition amount per semester in dollars.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_tuition(amount), indent=2)
+
+    @mcp.tool()
+    def set_healthcare(amount: float) -> str:
+        """Set annual health & dental insurance cost for graduate students in rates.yaml.
+
+        Args:
+            amount: Annual insurance cost in dollars.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(api.set_healthcare(amount), indent=2)
 
     # ------------------------------------------------------------------
     # Notes Tools

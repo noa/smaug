@@ -15,15 +15,23 @@ def _resolve_budget_config_path(store: ProjectStore, project_id: str, data_dir: 
     """Resolve the path to a project's budget_config.yaml.
 
     Returns the path (which may or may not exist yet), or None if the
-    project itself is not found.  When ``budget_dir`` is set in the
-    manifest the path is relative to CWD (matching ``store.load_budgets``).
+    project itself is not found.
     """
     data = store.get_project(project_id)
     if not data:
         return None
 
     if data.project.budget_dir:
-        return Path(data.project.budget_dir) / "budget_config.yaml"
+        b_path = Path(data.project.budget_dir)
+        if b_path.is_absolute():
+            return b_path / "budget_config.yaml"
+        # Check relative to data_dir first
+        if (Path(data_dir) / b_path / "budget_config.yaml").exists():
+            return Path(data_dir) / b_path / "budget_config.yaml"
+        candidate = Path(data_dir) / "projects" / project_id / "budget_config.yaml"
+        if candidate.exists():
+            return candidate
+        return b_path / "budget_config.yaml"
 
     # Default convention: projects/<PROJECT>/budget_config.yaml under data_dir
     return Path(data_dir) / "projects" / project_id / "budget_config.yaml"
@@ -349,10 +357,12 @@ def _cmd_budget_set(store: ProjectStore, args) -> None:
             # Update period dates if provided
             periods = config.get("contract", {}).get("periods", {})
             if year_key in periods:
-                if args.start:
-                    periods[year_key]["start"] = _expand_date(args.start, is_end=False)
-                if args.end:
-                    periods[year_key]["end"] = _expand_date(args.end, is_end=True)
+                start_val = getattr(args, "start", None)
+                end_val = getattr(args, "end", None)
+                if start_val:
+                    periods[year_key]["start"] = _expand_date(start_val, is_end=False)
+                if end_val:
+                    periods[year_key]["end"] = _expand_date(end_val, is_end=True)
 
             _recompute_totals(config)
     except ValueError as e:

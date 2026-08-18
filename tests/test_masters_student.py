@@ -325,7 +325,7 @@ personnel:
 
     from smaug.projections import load_personnel_config
 
-    rates, personnel = load_personnel_config(config)
+    _rates, personnel = load_personnel_config(config)
 
     assert len(personnel) == 1
     p = personnel[0]
@@ -369,7 +369,7 @@ personnel:
 
     from smaug.projections import load_personnel_config
 
-    rates, personnel = load_personnel_config(config)
+    _rates, personnel = load_personnel_config(config)
 
     p = personnel[0]
     assert p.hourly_rate is None  # Not explicitly set
@@ -416,7 +416,7 @@ personnel:
     from smaug.projections import load_personnel_config
 
     with caplog.at_level(logging.WARNING):
-        rates, personnel = load_personnel_config(config)
+        _rates, _personnel = load_personnel_config(config)
 
     assert any("exceeds JHU cap" in r.message for r in caplog.records)
 

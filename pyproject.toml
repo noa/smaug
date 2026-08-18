@@ -117,6 +117,7 @@ module = [
     "pdfplumber.*",
     "rich.*",
     "mcp.*",
+    "pydantic.*",
     "ruamel.*",
 ]
 ignore_missing_imports = true

@@ -923,6 +923,9 @@ class SmaugAPI:
         project: str,
         effort_pct: float,
         salary: int | None = None,
+        hours: float | None = None,
+        start: str | None = None,
+        end: str | None = None,
     ) -> dict:
         """Add a new person."""
         from .cli._write_commands import cmd_add_person
@@ -942,21 +945,23 @@ class SmaugAPI:
                         type=person_type,
                         project=project,
                         effort=str(effort_pct),
-                        salary=str(salary) if salary else None,
-                        start=None,
-                        end=None,
+                        salary=str(salary) if salary is not None else None,
+                        hours=hours,
+                        start=start,
+                        end=end,
                     ),
                 )
                 self._store = None  # Invalidate cache so reads reflect the write
-                return self._sanitize_result(
-                    {
-                        "success": True,
-                        "name": name,
-                        "type": person_type,
-                        "project": project,
-                        "effort_pct": effort_pct,
-                    }
-                )
+                res = {
+                    "success": True,
+                    "name": name,
+                    "type": person_type,
+                    "project": project,
+                    "effort_pct": effort_pct,
+                }
+                if hours is not None:
+                    res["hours"] = hours
+                return self._sanitize_result(res)
             except Exception as e:
                 return self._sanitize_result({"error": str(e)})
 
@@ -1682,5 +1687,497 @@ class SmaugAPI:
                 return self._sanitize_result(
                     {"success": True, "name": name, "departure_date": departure_date}
                 )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    # ------------------------------------------------------------------
+    # Report Gaps
+    # ------------------------------------------------------------------
+
+    def report_gaps(self) -> dict:
+        """Check for missing monthly spending reports across all projects.
+
+        Returns:
+            Dictionary with missing monthly report periods per project.
+        """
+        from datetime import datetime
+
+        store = self._get_store()
+        now = datetime.now()
+        projects = store.list_projects()
+        results: dict[str, list[str]] = {}
+
+        for project_id in projects:
+            data = store.get_project(project_id)
+            if not data or not data.spending:
+                results[project_id] = ["No reports found"]
+                continue
+
+            periods = {(r.year, r.month) for r in data.spending}
+            min_period = min(periods)
+            max_period = max(periods)
+
+            end_year, end_month = now.year, now.month
+            if max_period > (end_year, end_month):
+                end_year, end_month = max_period
+
+            expected = set()
+            year, month = min_period
+            while (year, month) <= (end_year, end_month):
+                expected.add((year, month))
+                month += 1
+                if month > 12:
+                    month = 1
+                    year += 1
+
+            missing = sorted(expected - periods)
+            if missing:
+                results[project_id] = [datetime(y, m, 1).strftime("%B %Y") for y, m in missing]
+
+        return {
+            "has_gaps": bool(results),
+            "gaps": results,
+        }
+
+    # ------------------------------------------------------------------
+    # Budget Health Check
+    # ------------------------------------------------------------------
+
+    def health_check(self) -> dict:
+        """Run comprehensive data integrity checks across projects, reports, and personnel."""
+        from datetime import datetime
+
+        from .cli._util import Anonymizer
+        from .projections import load_personnel_config
+
+        store = self._get_store()
+        now = datetime.now()
+        projects = store.list_projects()
+        warnings: list[str] = []
+        project_health: dict[str, dict] = {}
+
+        # 1. Report gaps
+        for project_id in projects:
+            data = store.get_project(project_id)
+            if not data or not data.spending:
+                warnings.append(f"Project '{project_id}': No spending reports found.")
+                project_health[project_id] = {"has_reports": False, "report_count": 0}
+                continue
+            periods = {(r.year, r.month) for r in data.spending}
+            min_period = min(periods)
+            max_period = max(periods)
+            end_year, end_month = now.year, now.month
+            if max_period > (end_year, end_month):
+                end_year, end_month = max_period
+            year, month = min_period
+            missing_months = []
+            while (year, month) <= (end_year, end_month):
+                if (year, month) not in periods:
+                    missing_months.append(f"{datetime(year, month, 1).strftime('%B %Y')}")
+                month += 1
+                if month > 12:
+                    month = 1
+                    year += 1
+            if missing_months:
+                warnings.append(
+                    f"Project '{project_id}' has missing report gaps: {', '.join(missing_months)}."
+                )
+            project_health[project_id] = {
+                "has_reports": True,
+                "report_count": len(data.spending),
+                "missing_reports": missing_months,
+            }
+
+        # 2. Invoices
+        for project_id in projects:
+            invoices = store.get_project_invoices(project_id)
+            data = store.get_project(project_id)
+            if data and data.project.project_type.value == "sponsored":
+                if not invoices:
+                    warnings.append(f"Project '{project_id}': No invoices found.")
+                else:
+                    periods = {(inv.period_end.year, inv.period_end.month) for inv in invoices}
+                    min_period = min(periods)
+                    end_year, end_month = now.year, now.month
+                    year, month = min_period
+                    missing_invs = []
+                    while (year, month) <= (end_year, end_month):
+                        if (year, month) not in periods:
+                            missing_invs.append(f"{datetime(year, month, 1).strftime('%B %Y')}")
+                        month += 1
+                        if month > 12:
+                            month = 1
+                            year += 1
+                    if missing_invs:
+                        warnings.append(
+                            f"Project '{project_id}' has missing invoice gaps: {', '.join(missing_invs)}."
+                        )
+
+        # 3. Parse warnings
+        for pw in store.get_parse_warnings():
+            warnings.append(f"Parse warning in {pw.file}: {pw.message}")
+
+        # 4. Personnel over-commitments
+        config_path = self._config_path()
+        if config_path.exists():
+            try:
+                _rates, config_personnel = load_personnel_config(config_path)
+                for p in config_personnel:
+                    total_effort = sum(a.effort for a in p.assignments)
+                    if total_effort > Decimal("1.0"):
+                        warnings.append(
+                            f"Personnel '{Anonymizer.anonymize(p.name)}' is over-committed at {total_effort * 100:.0f}% total effort across projects."
+                        )
+            except Exception as e:
+                warnings.append(f"Personnel config error: {e}")
+
+        return {
+            "status": "healthy" if not warnings else "warnings_found",
+            "warning_count": len(warnings),
+            "warnings": warnings,
+            "project_health": project_health,
+        }
+
+    # ------------------------------------------------------------------
+    # Budget Mitigation Optimizer
+    # ------------------------------------------------------------------
+
+    def optimize_budget(self, project: str, target_months: int = 12) -> dict:
+        """Suggest budget mitigation strategies (travel freezes, expense pauses, effort cuts).
+
+        Args:
+            project: Project short name.
+            target_months: Target extension in months (default 12).
+        """
+        from .projections import optimize_mitigations
+
+        store = self._get_store()
+        config_path = self._config_path()
+        if not config_path.exists():
+            return {"error": f"Personnel config not found: {config_path}"}
+
+        data = store.get_project(project)
+        if not data:
+            return {"error": f"Project not found: {project}"}
+
+        plans = optimize_mitigations(project, config_path, store, target_months=target_months)
+        return {
+            "project": project,
+            "target_months": target_months,
+            "plans": plans,
+        }
+
+    # ------------------------------------------------------------------
+    # Contractual Budget Methods
+    # ------------------------------------------------------------------
+
+    def list_budget_periods(self, project: str) -> dict:
+        """List contractual budget periods and funding increments for a project."""
+        from .cli._budget_commands import _resolve_budget_config_path
+        from .contractual_budget import load_contractual_budget
+
+        store = self._get_store()
+        config_path = _resolve_budget_config_path(store, project, self.data_dir)
+        if config_path is None:
+            return {"error": f"Project '{project}' not found"}
+        if not config_path.exists():
+            return {"project": project, "has_budget_config": False, "periods": []}
+
+        contract = load_contractual_budget(config_path)
+        if not contract:
+            return {"error": f"Could not parse budget config at {config_path}"}
+
+        periods = [
+            {
+                "year_num": p.year_num,
+                "start": p.start.strftime("%Y-%m-%d"),
+                "end": p.end.strftime("%Y-%m-%d"),
+                "total": float(p.total),
+                "direct": float(p.direct),
+                "idc": float(p.idc),
+            }
+            for p in sorted(contract.periods, key=lambda x: x.year_num)
+        ]
+
+        return {
+            "project": project,
+            "award_id": contract.award_id,
+            "pi": contract.pi,
+            "start_date": contract.start_date.strftime("%Y-%m-%d") if contract.start_date else None,
+            "total_budget": float(contract.total_budget),
+            "total_direct_costs": float(contract.total_direct_costs),
+            "total_indirect_costs": float(contract.total_indirect_costs),
+            "periods": periods,
+        }
+
+    def add_budget_period(
+        self,
+        project: str,
+        year: int,
+        total: float,
+        start: str,
+        end: str,
+        direct: float | None = None,
+        idc: float | None = None,
+    ) -> dict:
+        """Add a contractual funding increment period."""
+        from .cli._budget_commands import _cmd_budget_add
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                _cmd_budget_add(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        project=project,
+                        year=year,
+                        total=total,
+                        start=start,
+                        end=end,
+                        direct=direct,
+                        idc=idc,
+                    ),
+                )
+                self._store = None
+                return self._sanitize_result(
+                    {"success": True, "project": project, "year": year, "total": total}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def set_budget_period(
+        self,
+        project: str,
+        year: int,
+        total: float | None = None,
+        direct: float | None = None,
+        idc: float | None = None,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> dict:
+        """Modify an existing contractual funding increment period."""
+        from .cli._budget_commands import _cmd_budget_set
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                _cmd_budget_set(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        project=project,
+                        year=year,
+                        total=total,
+                        direct=direct,
+                        idc=idc,
+                        start=start,
+                        end=end,
+                    ),
+                )
+                self._store = None
+                return self._sanitize_result({"success": True, "project": project, "year": year})
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    # ------------------------------------------------------------------
+    # Project Lifecycle Methods
+    # ------------------------------------------------------------------
+
+    def add_project(
+        self,
+        project: str,
+        description: str | None = None,
+        project_type: str = "sponsored",
+        budget: float | None = None,
+        grant: str | None = None,
+        status: str = "active",
+    ) -> dict:
+        """Add a new project to the manifest."""
+        from .cli._write_commands import cmd_add_project
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                cmd_add_project(
+                    self._get_store(),
+                    DummyArgs(
+                        data_dir=self.data_dir,
+                        name=project,
+                        description=description,
+                        type=project_type,
+                        budget=str(int(budget)) if budget is not None else None,
+                        grant=grant,
+                        status=status,
+                    ),
+                )
+                self._store = None
+                return self._sanitize_result(
+                    {"success": True, "project": project, "type": project_type}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def set_project_status(self, project: str, status: str) -> dict:
+        """Set project lifecycle status (proposed, accepted, active, completed)."""
+        from .cli._write_commands import cmd_set_status
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                cmd_set_status(
+                    self._get_store(),
+                    DummyArgs(data_dir=self.data_dir, project=project, status=status),
+                )
+                self._store = None
+                return self._sanitize_result(
+                    {"success": True, "project": project, "status": status}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def set_project_budget(self, project: str, budget: float) -> dict:
+        """Set total budget for a project."""
+        from .cli._write_commands import cmd_set_budget
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                cmd_set_budget(
+                    self._get_store(),
+                    DummyArgs(data_dir=self.data_dir, project=project, budget=str(int(budget))),
+                )
+                self._store = None
+                return self._sanitize_result(
+                    {"success": True, "project": project, "budget": budget}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def set_project_end(self, project: str, end_date: str) -> dict:
+        """Set project end date (YYYY-MM)."""
+        from .cli._write_commands import cmd_set_project_end
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                cmd_set_project_end(
+                    self._get_store(),
+                    DummyArgs(data_dir=self.data_dir, project=project, date=end_date),
+                )
+                self._store = None
+                return self._sanitize_result(
+                    {"success": True, "project": project, "end_date": end_date}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    # ------------------------------------------------------------------
+    # Rate Configuration Methods
+    # ------------------------------------------------------------------
+
+    def set_fringe(self, person_type: str, rate: float) -> dict:
+        """Set fringe benefit rate for a personnel type."""
+        from .cli._write_commands import cmd_set_fringe
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                cmd_set_fringe(
+                    self._get_store(),
+                    DummyArgs(data_dir=self.data_dir, type=person_type, rate=str(rate)),
+                )
+                self._store = None
+                return self._sanitize_result(
+                    {"success": True, "person_type": person_type, "rate": rate}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def set_idc(self, rate: float) -> dict:
+        """Set IDC (indirect cost) rate."""
+        from .cli._write_commands import cmd_set_idc
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                cmd_set_idc(
+                    self._get_store(),
+                    DummyArgs(data_dir=self.data_dir, rate=str(rate)),
+                )
+                self._store = None
+                return self._sanitize_result({"success": True, "idc_rate": rate})
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def set_tuition(self, amount: float) -> dict:
+        """Set per-semester graduate student tuition cost."""
+        from .cli._write_commands import cmd_set_tuition
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                cmd_set_tuition(
+                    self._get_store(),
+                    DummyArgs(data_dir=self.data_dir, amount=str(amount)),
+                )
+                self._store = None
+                return self._sanitize_result({"success": True, "tuition_per_semester": amount})
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def set_healthcare(self, amount: float) -> dict:
+        """Set annual health & dental insurance cost for graduate students."""
+        from .cli._write_commands import cmd_set_healthcare
+
+        class DummyArgs:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        with self._suppress_stdout():
+            try:
+                cmd_set_healthcare(
+                    self._get_store(),
+                    DummyArgs(data_dir=self.data_dir, amount=str(amount)),
+                )
+                self._store = None
+                return self._sanitize_result({"success": True, "healthcare_annual": amount})
             except Exception as e:
                 return self._sanitize_result({"error": str(e)})
