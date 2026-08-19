@@ -3,7 +3,6 @@
 from decimal import Decimal
 from pathlib import Path
 
-from ..projections import PersonnelEntry
 from ..store import ProjectStore
 from ._util import Anonymizer, Colors, color, load_aliases, parse_date_input
 
@@ -817,189 +816,83 @@ def cmd_spend_plan(store: ProjectStore, args) -> None:
 
 
 def cmd_budget_vs_actuals(store: ProjectStore, args) -> None:
-    """Compare projected spending against contractual budget ceilings."""
-    from datetime import date
+    """Compare projected spending against contractual budget ceilings.
+
+    Rendering only: the figures come from SmaugAPI.budget_vs_actuals so the CLI
+    and the MCP tools cannot drift apart on how a period's actual is derived.
+    """
     from decimal import Decimal
 
-    from ..contractual_budget import load_contractual_budget
-    from ..projections import load_personnel_config, project_monthly_costs
+    from ..api import SmaugAPI
 
     project_id = args.project
-    data = store.get_project(project_id)
-    if not data:
-        print(f"Project not found: {project_id}")
+    result = SmaugAPI(args.data_dir).budget_vs_actuals(project_id)
+    if "error" in result:
+        print(f"Error: {result['error']}")
         return
 
-    # Load contractual budget
-    from ..budget_resolution import resolve_budget_config_path
+    status_styles = {
+        "underspend": ("⚠ Underspend", Colors.YELLOW),
+        "under": ("✓ Under", Colors.GREEN),
+        "overspend": ("⚠ Overspend", Colors.RED),
+        "on_track": ("→ On Track", Colors.GREEN),
+        "tight": ("→ Tight", Colors.YELLOW),
+        "planned": ("○ Planned", Colors.BLUE),
+    }
 
-    budget_config_path = resolve_budget_config_path(store, project_id, args.data_dir)
-    if not budget_config_path or not budget_config_path.exists():
-        print(f"Error: No contractual budget config found for {project_id}")
-        print(f"Expected: {budget_config_path}")
-        return
-
-    contract = load_contractual_budget(budget_config_path)
-    if not contract:
-        print(f"Error: Could not parse budget config: {budget_config_path}")
-        return
-
-    # Load personnel config for projections
-    config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
-    rates = None
-    personnel: list[PersonnelEntry] = []
-    if config_path.exists():
-        rates, personnel = load_personnel_config(config_path)
-
-    # Get actual spending from reports (cumulative - use latest per period)
-    today = date.today()
-
-    # Header
     print(f"\n{color('=== Budget vs Actuals: ' + project_id + ' ===', Colors.BOLD + Colors.CYAN)}")
-    print(f"Award: {contract.award_id} | Total Budget: ${contract.total_budget:,.0f}\n")
+    print(f"Award: {result['award_id']} | Total Budget: ${result['total_budget']:,.0f}\n")
 
-    # Table header
     header = f"{'Period':<10} {'Dates':<25} {'Budget':>14} {'Actual':>14} {'Projected':>14} {'Variance':>12} {'Status':<12}"
     print(color(header, Colors.BOLD))
     print(color("─" * 105, Colors.DIM))
 
-    total_budget = Decimal("0")
-    total_actual = Decimal("0")
-    total_projected = Decimal("0")
+    def money(value: float) -> str:
+        return f"${value:>12,.0f}" if value > 0 else f"{'-':>14}"
 
-    for period in sorted(contract.periods, key=lambda p: p.year_num):
-        period_name = f"Year {period.year_num}"
-        date_range = f"{period.start.strftime('%b %Y')} - {period.end.strftime('%b %Y')}"
-        budget_amt = period.total
-        total_budget += budget_amt
+    def variance_cell(value: float) -> str:
+        text = f"${value:>10,.0f}" if value >= 0 else f"-${abs(value):>9,.0f}"
+        return color(text, Colors.RED if value < 0 else Colors.GREEN)
 
-        # Determine if period is past, current, or future
-        is_past = period.end < today
-        is_current = period.start <= today <= period.end
-        is_future = period.start > today
-
-        actual_amt = Decimal("0")
-        projected_amt = Decimal("0")
-
-        if is_past or is_current:
-            # Get actual spending for this period from reports
-            # Find reports within this period
-            period_reports = [
-                r for r in data.spending if period.start <= date(r.year, r.month, 1) <= period.end
-            ]
-            if period_reports:
-                # For cumulative reports, get both start and end of period values
-                latest = max(period_reports, key=lambda r: (r.year, r.month))
-                earliest = min(period_reports, key=lambda r: (r.year, r.month))
-
-                # If this is the first period, actual = latest cumulative
-                if period.year_num == 1:
-                    actual_amt = latest.total_spent
-                else:
-                    # Try to get prior period's ending value
-                    prior_period = contract.get_period_by_year(period.year_num - 1)
-                    prior_ending = Decimal("0")
-
-                    if prior_period:
-                        prior_reports = [
-                            r
-                            for r in data.spending
-                            if prior_period.start <= date(r.year, r.month, 1) <= prior_period.end
-                        ]
-                        if prior_reports:
-                            prior_latest = max(prior_reports, key=lambda r: (r.year, r.month))
-                            prior_ending = prior_latest.total_spent
-                        else:
-                            # No prior period data - use first report in this period as baseline
-                            # This approximates the starting point
-                            prior_ending = earliest.total_spent
-
-                    actual_amt = latest.total_spent - prior_ending
-
-        if (is_current or is_future) and rates and personnel:
-            # Determine projection start (today for current, period start for future)
-            proj_start = today.replace(day=1) if is_current else period.start
-            current = proj_start
-
-            while current <= period.end:
-                proj = project_monthly_costs(
-                    project_id, rates, personnel, current.year, current.month
-                )
-                projected_amt += proj.total
-
-                # Next month
-                if current.month == 12:
-                    current = current.replace(year=current.year + 1, month=1)
-                else:
-                    current = current.replace(month=current.month + 1)
-
-        total_actual += actual_amt
-        total_projected += projected_amt
-
-        # Calculate variance
-        spent_plus_proj = actual_amt + projected_amt
-        variance = budget_amt - spent_plus_proj
-
-        # Format columns
-        actual_str = f"${actual_amt:>12,.0f}" if actual_amt > 0 else f"{'-':>14}"
-        proj_str = f"${projected_amt:>12,.0f}" if projected_amt > 0 else f"{'-':>14}"
-        variance_str = f"${variance:>10,.0f}" if variance >= 0 else f"-${abs(variance):>9,.0f}"
-
-        # Status indicator with color
-        # Underspend threshold: if >25% of period budget remains unspent/unprojected
-        underspend_threshold = budget_amt * Decimal("0.25")
-
-        if is_past:
-            if variance > underspend_threshold:
-                status = color("⚠ Underspend", Colors.YELLOW)
-            elif variance >= 0:
-                status = color("✓ Under", Colors.GREEN)
-            else:
-                status = color("⚠ Over", Colors.RED)
-        elif is_current:
-            if variance > underspend_threshold:
-                status = color("⚠ Underspend", Colors.YELLOW)
-            elif variance >= budget_amt * Decimal("0.05"):  # >5% margin
-                status = color("→ On Track", Colors.GREEN)
-            elif variance >= 0:
-                status = color("→ Tight", Colors.YELLOW)
-            else:
-                status = color("⚠ Overspend", Colors.RED)
-        else:
-            if variance > underspend_threshold:
-                status = color("⚠ Underspend", Colors.YELLOW)
-            elif variance >= 0:
-                status = color("○ Planned", Colors.BLUE)
-            else:
-                status = color("⚠ Overspend", Colors.RED)
-
-        # Color the variance
-        if variance < 0:
-            variance_str = color(variance_str, Colors.RED)
-        elif variance > 0:
-            variance_str = color(variance_str, Colors.GREEN)
-
+    for period in result["periods"]:
+        label, style = status_styles.get(period["status"], (period["status"], Colors.DIM))
         print(
-            f"{period_name:<10} {date_range:<25} ${budget_amt:>12,.0f} {actual_str} {proj_str} {variance_str:>21} {status}"
+            f"{'Year ' + str(period['year_num']):<10} {period['dates']:<25} "
+            f"${period['budget']:>12,.0f} {money(period['actual'])} "
+            f"{money(period['projected'])} {variance_cell(period['variance']):>21} "
+            f"{color(label, style)}"
         )
 
-    # Total row
     print(color("─" * 105, Colors.DIM))
-    total_variance = total_budget - total_actual - total_projected
-    total_var_str = (
-        f"${total_variance:>10,.0f}" if total_variance >= 0 else f"-${abs(total_variance):>9,.0f}"
-    )
-    if total_variance < 0:
-        total_var_str = color(total_var_str, Colors.RED)
-    else:
-        total_var_str = color(total_var_str, Colors.GREEN)
-
-    actual_total_str = f"${total_actual:>12,.0f}" if total_actual > 0 else f"{'-':>14}"
-    proj_total_str = f"${total_projected:>12,.0f}" if total_projected > 0 else f"{'-':>14}"
-
     print(
-        f"{color('TOTAL', Colors.BOLD):<10} {'':<25} ${total_budget:>12,.0f} {actual_total_str} {proj_total_str} {total_var_str:>21}"
+        f"{color('TOTAL', Colors.BOLD):<10} {'':<25} ${result['total_budget']:>12,.0f} "
+        f"{money(result['total_actual'])} {money(result['total_projected'])} "
+        f"{variance_cell(result['total_variance']):>21}"
     )
+
+    opening = result.get("opening_balance")
+    if opening:
+        print()
+        print(
+            color(
+                f"Note: ${opening['amount']:,.0f} was spent before the earliest available "
+                f"report ({opening['covers']}).",
+                Colors.DIM,
+            )
+        )
+        print(color("      It is spread evenly across those months; no monthly", Colors.DIM))
+        print(color("      detail exists to split it exactly.", Colors.DIM))
+
+    if not result.get("reconciles", True):
+        shortfall = Decimal(str(result["cumulative_spent"])) - Decimal(str(result["total_actual"]))
+        print()
+        print(
+            color(
+                f"Warning: period actuals fall ${shortfall:,.2f} short of the "
+                f"${result['cumulative_spent']:,.2f} cumulative spend on record.",
+                Colors.RED,
+            )
+        )
 
 
 def cmd_summary(store: ProjectStore, args) -> None:

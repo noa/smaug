@@ -2,10 +2,18 @@
 Sponsored PDF report parsing.
 
 Extracts spending data and personnel costs from JHU sponsored project reports.
+
+The summary page holds two right-aligned numeric tables (Revenue and
+Expenditures) whose blank cells are simply absent from the extracted text.
+Counting tokens therefore mis-assigns columns on any row with a blank cell --
+for example a category with no charge in the current month -- so the tables are
+read positionally instead: every numeric token is matched to the header column
+whose right edge it aligns with. Pages without word geometry (synthetic
+fixtures, damaged PDFs) fall back to regex extraction.
 """
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -18,6 +26,57 @@ from .models import (
     SpendingReport,
 )
 
+MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+# A numeric table cell: 1,234.56 / (1,234.56) / 12.3% / 100%
+_NUMERIC_CELL = re.compile(r"^\(?-?[\d,]+\.\d{1,2}\)?%?$|^\(?-?[\d,]+\)?%$")
+
+# Summary-page category rows -> SpendingReport field prefixes
+CATEGORY_LABELS = {
+    "salaries & wages": "salary",
+    "salaries and wages": "salary",
+    "fringe benefits": "fringe",
+    "tuition & fees": "tuition",
+    "tuition and fees": "tuition",
+    "student health insurance": "insurance",
+    "total student health insurance": "insurance",
+    "service center": "service_center",
+    "total service center": "service_center",
+    "travel domestic": "travel",
+    "travel foreign": "travel_foreign",
+    "supplies & materials": "supplies",
+    "materials & supplies": "supplies",
+    "supplies": "supplies",
+    "capital equipment": "equipment",
+    "equipment": "equipment",
+    "subcontracts": "subcontracts",
+    "subawards": "subcontracts",
+    "consultant services": "consultant",
+    "consultants": "consultant",
+    "other expenses": "other",
+}
+
+# Summary-page total rows
+TOTAL_LABELS = {
+    "total direct costs": "direct",
+    "total indirect costs": "indirect",
+    "total expenditures": "total",
+    "undistributed budget": "undistributed",
+}
+
 
 def clean_text_to_decimal(text: str | None) -> Decimal | None:
     """
@@ -27,8 +86,10 @@ def clean_text_to_decimal(text: str | None) -> Decimal | None:
     if not text or not str(text).strip():
         return None
 
-    # Remove commas, parentheses (for negative), and whitespace
-    cleaned_text = str(text).strip().replace(",", "").replace("(", "-").replace(")", "")
+    # Remove commas, percent signs, and map parentheses to a leading minus
+    cleaned_text = (
+        str(text).strip().replace(",", "").replace("(", "-").replace(")", "").replace("%", "")
+    )
 
     if not cleaned_text:
         return None
@@ -40,33 +101,241 @@ def clean_text_to_decimal(text: str | None) -> Decimal | None:
 
 
 def _parse_date_flexible(val: str | None) -> date | None:
-    """Parse flexible date strings (MM/DD/YYYY, MM/DD/YY, MM/YYYY, YYYY-MM-DD, YYYY-MM)."""
+    """Parse MM/DD/YYYY, MM/DD/YY, MM/YYYY, YYYY-MM-DD, YYYY-MM, or Month-YYYY."""
     if not val or not str(val).strip():
         return None
     val_str = str(val).strip()
-    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%m/%Y", "%Y-%m"):
+    for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d", "%m/%Y", "%Y-%m", "%B-%Y", "%b-%Y"):
         try:
-            dt = datetime.strptime(val_str, fmt)
-            return dt.date()
+            return datetime.strptime(val_str, fmt).date()
         except ValueError:
             pass
     return None
 
 
+def month_end(d: date) -> date:
+    """Last calendar day of the month containing ``d``."""
+    if d.month == 12:
+        return date(d.year, 12, 31)
+    return date(d.year, d.month + 1, 1) - timedelta(days=1)
+
+
 def parse_employee_type(gl_account: str) -> EmployeeType:
-    """Determine employee type from G/L account description."""
+    """Determine employee type from a G/L account label (e.g. "SAL-FACULTY FT/PT")."""
+    if not gl_account:
+        return EmployeeType.UNKNOWN
     gl_lower = gl_account.lower()
-    if "faculty" in gl_lower:
-        return EmployeeType.FACULTY
-    elif "postdoc" in gl_lower:
-        return EmployeeType.POSTDOC
-    elif "student grad" in gl_lower or "grad student" in gl_lower:
+
+    # Student accounts are matched before the faculty/staff keywords, so that
+    # "SAL-STUDENT GRADUATE" is not swallowed by a broader rule. Note that
+    # "SALARY-STU POSTDOCTORAL" is a postdoc account and falls through below.
+    if re.search(r"stu(dent)?\s+(grad|graduate)", gl_lower) or "grad student" in gl_lower:
         return EmployeeType.GRAD_STUDENT
-    elif "masters" in gl_lower:
+    if "masters" in gl_lower or re.search(r"stu(dent)?\s+mast", gl_lower):
         return EmployeeType.MASTERS_STUDENT
-    elif "staff" in gl_lower or "nadm" in gl_lower:
+    if "postdoc" in gl_lower:
+        return EmployeeType.POSTDOC
+    # "SAL-FACULTY FT/PT", "SALARY-FACULTY FT/PT", and the abbreviated "SAL-FAC TLC"
+    if "faculty" in gl_lower or re.search(r"\bfac\b", gl_lower):
+        return EmployeeType.FACULTY
+    if "staff" in gl_lower or "nadm" in gl_lower or "casual" in gl_lower:
         return EmployeeType.STAFF
+    if "student" in gl_lower:
+        return EmployeeType.GRAD_STUDENT
     return EmployeeType.UNKNOWN
+
+
+# ----------------------------------------------------------------------
+# Positional table extraction
+# ----------------------------------------------------------------------
+
+
+def _cluster_rows(words: list[dict], tol: float = 4.0) -> list[list[dict]]:
+    """Group extracted words into visual rows by their vertical position."""
+    rows: list[tuple[float, list[dict]]] = []
+    for word in sorted(words, key=lambda w: (w["top"], w["x0"])):
+        for top, bucket in rows:
+            if abs(top - word["top"]) < tol:
+                bucket.append(word)
+                break
+        else:
+            rows.append((word["top"], [word]))
+    return [sorted(bucket, key=lambda w: w["x0"]) for _, bucket in rows]
+
+
+def _split_header_columns(row: list[dict], gap: float = 6.0) -> list[dict]:
+    """
+    Split a header row into columns.
+
+    Words inside one header phrase sit ~2-3pt apart; separate columns are
+    separated by 10pt or more, so a 6pt gap is an unambiguous divider.
+    """
+    columns: list[dict] = []
+    for word in row:
+        if columns and word["x0"] - columns[-1]["x1"] < gap:
+            columns[-1]["text"] += " " + word["text"]
+            columns[-1]["x1"] = word["x1"]
+        else:
+            columns.append({"text": word["text"], "x0": word["x0"], "x1": word["x1"]})
+    return columns
+
+
+def _canonical_column(label: str, period_month: str | None) -> str | None:
+    """Map a header column label to a canonical key."""
+    norm = re.sub(r"\s+", " ", label.strip().lower())
+    if period_month and norm == period_month.lower():
+        return "month"
+    # Any "<Month> <Year>" header is the single-month column.
+    if re.match(r"^(" + "|".join(m.lower() for m in MONTH_NAMES) + r")\s+\d{4}$", norm):
+        return "month"
+    return {
+        "budget": "budget",
+        "total spent": "spent",
+        "total committed": "committed",
+        "total spent & committed": "spent_and_committed",
+        "total received": "received",
+        "total expected": "expected",
+        "total rcvd. & expected": "rcvd_and_expected",
+        "total rcvd & expected": "rcvd_and_expected",
+        "budget balance": "balance",
+        "budget utilized": "utilized",
+        "budget received": "pct_received",
+    }.get(norm)
+
+
+def _assign_cells(row: list[dict], columns: list[tuple[str, float]]) -> tuple[str, dict]:
+    """
+    Split a data row into its label and its numeric cells.
+
+    Columns are right-aligned, so each numeric token is assigned to the column
+    with the nearest right edge. Tokens further than ``max_dist`` from every
+    column are dropped rather than guessed at.
+    """
+    max_dist = 30.0
+    label_parts: list[str] = []
+    cells: dict[str, Decimal] = {}
+
+    for word in row:
+        text = word["text"]
+        if _NUMERIC_CELL.match(text):
+            best_key = None
+            best_dist = max_dist
+            for key, right_edge in columns:
+                dist = abs(word["x1"] - right_edge)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_key = key
+            if best_key is not None and best_key not in cells:
+                value = clean_text_to_decimal(text)
+                if value is not None:
+                    cells[best_key] = value
+        else:
+            label_parts.append(text)
+
+    return re.sub(r"\s+", " ", " ".join(label_parts)).strip(), cells
+
+
+def _extract_summary_tables(page, period_month: str | None) -> dict:
+    """
+    Read the Revenue and Expenditures tables from the summary page positionally.
+
+    Returns a dict of parsed fields, or an empty dict when the page exposes no
+    usable word geometry.
+    """
+    try:
+        words = page.extract_words()
+    except Exception:
+        return {}
+    if not words or not isinstance(words, list):
+        return {}
+    try:
+        rows = _cluster_rows([w for w in words if "x0" in w and "top" in w])
+    except (TypeError, KeyError):
+        return {}
+
+    result: dict = {}
+    table: str | None = None
+    columns: list[tuple[str, float]] = []
+
+    for row in rows:
+        row_text = re.sub(r"\s+", " ", " ".join(w["text"] for w in row)).strip()
+        lowered = row_text.lower()
+
+        if lowered.startswith("report for grant"):
+            table = None
+            continue
+
+        # Header rows start a new table and define its column geometry.
+        if re.match(r"^revenue\s+budget\b", lowered) or re.match(
+            r"^expenditures\s+budget\b", lowered
+        ):
+            table = "revenue" if lowered.startswith("revenue") else "expenditures"
+            columns = []
+            for col in _split_header_columns(row)[1:]:  # skip the row-label header
+                key = _canonical_column(col["text"], period_month)
+                if key:
+                    columns.append((key, col["x1"]))
+            continue
+
+        if table is None or not columns:
+            continue
+
+        label, cells = _assign_cells(row, columns)
+        if not label or not cells:
+            continue
+        norm_label = label.lower()
+
+        if table == "revenue":
+            if norm_label in ("sponsored revenue", "total revenue"):
+                # The Revenue "Budget" column is the funded ceiling: the amount
+                # the sponsor has actually obligated, which is what a stop-work
+                # forecast must be measured against.
+                if "budget" in cells:
+                    result["funded_ceiling"] = cells["budget"]
+                if "received" in cells:
+                    result["total_revenue_received"] = cells["received"]
+                if "month" in cells:
+                    result["revenue_month"] = cells["month"]
+            continue
+
+        # Expenditures table
+        if norm_label in TOTAL_LABELS:
+            kind = TOTAL_LABELS[norm_label]
+            if kind == "total":
+                result["total_month"] = cells.get("month")
+                result["total_spent"] = cells.get("spent")
+                result["total_committed"] = cells.get("committed")
+                result["total_spent_and_committed"] = cells.get("spent_and_committed")
+                if "budget" in cells:
+                    result["expenditure_budget"] = cells["budget"]
+                if "utilized" in cells:
+                    result["budget_utilized_pct"] = cells["utilized"]
+            elif kind == "indirect":
+                result["indirect_month"] = cells.get("month")
+                result["indirect_spent"] = cells.get("spent")
+                result["indirect_committed"] = cells.get("committed")
+            elif kind == "direct":
+                result["direct_month"] = cells.get("month")
+                result["direct_spent"] = cells.get("spent")
+                result["direct_committed"] = cells.get("committed")
+            continue
+
+        prefix = CATEGORY_LABELS.get(norm_label)
+        if prefix:
+            for cell_key, suffix in (
+                ("month", "month"),
+                ("spent", "spent"),
+                ("committed", "committed"),
+            ):
+                if cell_key in cells:
+                    result[f"{prefix}_{suffix}"] = cells[cell_key]
+
+    return result
+
+
+# ----------------------------------------------------------------------
+# Summary page
+# ----------------------------------------------------------------------
 
 
 def parse_sponsored_summary(page) -> dict:
@@ -76,7 +345,7 @@ def parse_sponsored_summary(page) -> dict:
     Returns dict with summary amounts, categories, dates, revenue, and ceiling.
     """
     text = page.extract_text() or ""
-    result = {}
+    result: dict = {}
 
     # Extract grant info
     grant_match = re.search(r"Grant:\s+(\d+)\s+-\s+(.*?)\s+PI For", text)
@@ -90,67 +359,21 @@ def parse_sponsored_summary(page) -> dict:
         result["sponsored_program"] = sp_match.group(1)
         result["award_id"] = sp_match.group(2)
 
-    # Extract report date from "Expenditures Budget Month Year"
-    date_match = re.search(r"Expenditures Budget\s+([A-Za-z]+)\s+(\d{4})", text)
-    if date_match:
-        month_name = date_match.group(1)
-        year = date_match.group(2)
+    # Report period: the bare "<Month> <Year>" line in the page header
+    period_match = re.search(
+        r"^\s*(" + "|".join(MONTH_NAMES) + r")\s+(\d{4})\b", text, re.MULTILINE
+    )
+    if not period_match:
+        period_match = re.search(
+            r"Expenditures Budget\s+(" + "|".join(MONTH_NAMES) + r")\s+(\d{4})", text
+        )
+    if period_match:
+        month_name, year = period_match.group(1), period_match.group(2)
         result["period"] = f"{month_name} {year}"
         result["year"] = int(year)
-        try:
-            result["month"] = datetime.strptime(month_name, "%B").month
-        except ValueError:
-            result["month"] = 1
+        result["month"] = MONTH_NAMES.index(month_name) + 1
 
-    # Extract total expenditures
-    # Format: Total Expenditures [<budget>] <monthly> <cum_spent> <committed> <spent+committed>
-    exp_match = re.search(
-        r"Total Expenditures\s+(?:[\d,.()-]+\s+)?([\d,.-]+)\s+([\d,.-]+)\s+([\d,.-]+)\s+([\d,.-]+)",
-        text,
-    )
-    if exp_match:
-        result["total_month"] = clean_text_to_decimal(exp_match.group(1))
-        result["total_spent"] = clean_text_to_decimal(exp_match.group(2))
-        result["total_committed"] = clean_text_to_decimal(exp_match.group(3))
-        result["total_spent_and_committed"] = clean_text_to_decimal(exp_match.group(4))
-
-    # Extract indirect costs
-    indirect_match = re.search(
-        r"Total Indirect Costs\s+(?:[\d,.()-]+\s+)?([\d,.-]+)\s+([\d,.-]+)(?:\s+[\d,.-]+)?\s+([\d,.-]+)",
-        text,
-    )
-    if indirect_match:
-        result["indirect_month"] = clean_text_to_decimal(indirect_match.group(1))
-        result["indirect_spent"] = clean_text_to_decimal(indirect_match.group(2))
-
-    # Extract budget utilization percentage
-    util_match = re.search(r"Budget Utilized:\s+([\d.]+)%", text)
-    if util_match:
-        result["budget_utilized_pct"] = Decimal(util_match.group(1))
-
-    # Extract funded ceiling and revenue info
-    rev_match = re.search(r"Sponsored Revenue\s+([\d,]+\.\d{2})(?:\s+([\d,]+\.\d{2}))?", text)
-    if rev_match:
-        result["funded_ceiling"] = clean_text_to_decimal(rev_match.group(1))
-        result["total_revenue_received"] = clean_text_to_decimal(rev_match.group(1))
-        if rev_match.group(2):
-            result["revenue_month"] = clean_text_to_decimal(rev_match.group(2))
-
-    tot_rec_match = re.search(r"Total Received:?\s*([\d,]+\.\d{2})", text, re.IGNORECASE)
-    if tot_rec_match:
-        result["total_revenue_received"] = clean_text_to_decimal(tot_rec_match.group(1))
-        if not result.get("funded_ceiling"):
-            result["funded_ceiling"] = result["total_revenue_received"]
-
-    rec_month_match = re.search(
-        r"(?:Month|July|August|September|October|November|December|January|February|March|April|May|June)\s+Receipts:?\s*([\d,]+\.\d{2})",
-        text,
-        re.IGNORECASE,
-    )
-    if rec_month_match:
-        result["revenue_month"] = clean_text_to_decimal(rec_month_match.group(1))
-
-    # Extract award metadata (dates, grantor, IDC rate)
+    # Award metadata
     begin_match = re.search(
         r"Budget Begin(?: Date)?:?\s*(\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})",
         text,
@@ -159,14 +382,14 @@ def parse_sponsored_summary(page) -> dict:
     if begin_match:
         result["budget_start_date"] = _parse_date_flexible(begin_match.group(1))
     else:
-        period_match = re.search(
+        span_match = re.search(
             r"Budget Period:?\s*(\d{1,2}/\d{1,2}/\d{2,4})\s+to\s+(\d{1,2}/\d{1,2}/\d{2,4})",
             text,
             re.IGNORECASE,
         )
-        if period_match:
-            result["budget_start_date"] = _parse_date_flexible(period_match.group(1))
-            result["budget_end_date"] = _parse_date_flexible(period_match.group(2))
+        if span_match:
+            result["budget_start_date"] = _parse_date_flexible(span_match.group(1))
+            result["budget_end_date"] = _parse_date_flexible(span_match.group(2))
 
     if "budget_end_date" not in result:
         end_match = re.search(
@@ -185,87 +408,292 @@ def parse_sponsored_summary(page) -> dict:
     if proj_end_match:
         result["grant_end_date"] = _parse_date_flexible(proj_end_match.group(1))
 
-    grantor_match = re.search(r"Grantor(?:\s+Code)?:?\s*([A-Za-z0-9_-]+)", text, re.IGNORECASE)
-    if grantor_match:
-        result["grantor_code"] = grantor_match.group(1).strip()
+    proj_start_match = re.search(
+        r"Grant Project Start Date:?\s*(\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})",
+        text,
+        re.IGNORECASE,
+    )
+    if proj_start_match and "budget_start_date" not in result:
+        result["budget_start_date"] = _parse_date_flexible(proj_start_match.group(1))
 
+    # The grantor name shares its line with the next labelled field, and is a
+    # multi-word name -- so take the rest of the line and then trim the trailing
+    # label rather than stopping at the first token.
+    grantor_match = re.search(r"Grantor(?:\s+Code)?:\s*(.+)$", text, re.MULTILINE)
+    if grantor_match:
+        grantor = re.split(
+            r"\s*(?:Budget Begin|Budget End|Grant Project|Award ID|Payment Method|Grant Status"
+            r"|Responsible Cost|Program FA|PI on Grant|Sp\. Program)\b",
+            grantor_match.group(1),
+        )[0].strip()
+        # Some layouts run the next label straight onto the value with no space
+        grantor = re.sub(r"(?:Budget|Grant|Award|Payment|Program)\s*$", "", grantor).strip(" :")
+        if grantor:
+            result["grantor_code"] = grantor
+
+    # F&A rate is printed without a percent sign ("F&A Rate: 55.50")
     fa_match = re.search(
-        r"(?:F\s*&\s*A|IDC|Indirect Cost)\s+Rate:?\s*([\d.]+)%",
+        r"(?:F\s*&\s*A|IDC|Indirect Cost)\s*Rate:?\s*([\d.]+)\s*%?",
         text,
         re.IGNORECASE,
     )
     if fa_match:
         result["stated_idc_rate"] = clean_text_to_decimal(fa_match.group(1))
 
-    # Extract category breakdowns
-    # Each category line: "Category Name  <month_amt>  <cum_spent>  [<committed>]"
-    category_patterns = {
-        "salary": (r"Salaries \& Wages\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?", 1, 2, 3),
-        "fringe": (r"Fringe Benefits\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?", 1, 2, 3),
-        "tuition": (r"Tuition \& Fees\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?", 1, 2, 3),
-        "insurance": (
-            r"(?:Student Health Insurance|Total Student Health)\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?",
-            1,
-            2,
-            3,
-        ),
-        "service_center": (
-            r"(?:Service Center|Total Service Center)\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?",
-            1,
-            2,
-            3,
-        ),
-        "travel": (r"Travel Domestic\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?", 1, 2, 3),
-        "travel_foreign": (
-            r"Travel Foreign\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?",
-            1,
-            2,
-            3,
-        ),
-        "supplies": (
-            r"(?:Supplies \& Materials|Materials \& Supplies|Supplies)\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?",
-            1,
-            2,
-            3,
-        ),
-        "equipment": (
-            r"(?:Capital Equipment|Equipment)\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?",
-            1,
-            2,
-            3,
-        ),
-        "subcontracts": (
-            r"(?:Subcontracts|Subawards)\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?",
-            1,
-            2,
-            3,
-        ),
-        "consultant": (
-            r"(?:Consultant Services|Consultants)\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?",
-            1,
-            2,
-            3,
-        ),
-        "other": (r"Other Expenses\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?", 1, 2, 3),
-    }
+    # Budget utilization percentage
+    util_match = re.search(r"Budget Utilized:\s+([\d.]+)%", text)
+    if util_match:
+        result["budget_utilized_pct"] = Decimal(util_match.group(1))
 
-    for key, (pattern, month_group, spent_group, committed_group) in category_patterns.items():
+    # ---- Positional extraction of the two numeric tables ---------------
+    positional = _extract_summary_tables(page, result.get("period"))
+    if positional:
+        result.update({k: v for k, v in positional.items() if v is not None})
+        # A blank cell means zero, not "same as the neighbouring column".
+        for prefix in set(CATEGORY_LABELS.values()):
+            for suffix in ("month", "spent", "committed"):
+                result.setdefault(f"{prefix}_{suffix}", Decimal("0"))
+        return result
+
+    # ---- Regex fallback ------------------------------------------------
+    # Reached only for pages without word geometry. Column blanks are
+    # indistinguishable here, so values may be shifted on sparse rows.
+    exp_match = re.search(
+        r"Total Expenditures\s+(?:[\d,.()-]+\s+)?([\d,.-]+)\s+([\d,.-]+)\s+([\d,.-]+)\s+([\d,.-]+)",
+        text,
+    )
+    if exp_match:
+        result["total_month"] = clean_text_to_decimal(exp_match.group(1))
+        result["total_spent"] = clean_text_to_decimal(exp_match.group(2))
+        result["total_committed"] = clean_text_to_decimal(exp_match.group(3))
+        result["total_spent_and_committed"] = clean_text_to_decimal(exp_match.group(4))
+
+    indirect_match = re.search(
+        r"Total Indirect Costs\s+(?:[\d,.()-]+\s+)?([\d,.-]+)\s+([\d,.-]+)(?:\s+[\d,.-]+)?\s+([\d,.-]+)",
+        text,
+    )
+    if indirect_match:
+        result["indirect_month"] = clean_text_to_decimal(indirect_match.group(1))
+        result["indirect_spent"] = clean_text_to_decimal(indirect_match.group(2))
+
+    rev_match = re.search(r"Sponsored Revenue\s+([\d,]+\.\d{2})(?:\s+([\d,]+\.\d{2}))?", text)
+    if rev_match:
+        result["funded_ceiling"] = clean_text_to_decimal(rev_match.group(1))
+        if rev_match.group(2):
+            result["revenue_month"] = clean_text_to_decimal(rev_match.group(2))
+
+    for key, pattern in (
+        ("salary", r"Salaries \& Wages\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        ("fringe", r"Fringe Benefits\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        ("tuition", r"Tuition \& Fees\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        (
+            "insurance",
+            r"Student Health Insurance\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?",
+        ),
+        ("service_center", r"Service Center\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        ("travel", r"Travel Domestic\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        ("travel_foreign", r"Travel Foreign\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        ("supplies", r"Supplies \& Materials\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        ("equipment", r"Capital Equipment\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        ("subcontracts", r"Subcontracts\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        ("consultant", r"Consultant Services\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+        ("other", r"Other Expenses\s+([\d,.()-]+)\s+([\d,.()-]+)(?:\s+([\d,.()-]+))?"),
+    ):
         match = re.search(pattern, text)
         if match:
-            result[f"{key}_month"] = clean_text_to_decimal(match.group(month_group))
-            result[f"{key}_spent"] = clean_text_to_decimal(match.group(spent_group))
-            if committed_group and match.group(committed_group):
-                result[f"{key}_committed"] = clean_text_to_decimal(match.group(committed_group))
+            result[f"{key}_month"] = clean_text_to_decimal(match.group(1))
+            result[f"{key}_spent"] = clean_text_to_decimal(match.group(2))
+            if match.group(3):
+                result[f"{key}_committed"] = clean_text_to_decimal(match.group(3))
+
+    tot_rec_match = re.search(r"Total Received:?\s*([\d,]+\.\d{2})", text, re.IGNORECASE)
+    if tot_rec_match:
+        result["total_revenue_received"] = clean_text_to_decimal(tot_rec_match.group(1))
 
     return result
+
+
+# ----------------------------------------------------------------------
+# Salary pages
+# ----------------------------------------------------------------------
+
+# Rows look like:
+#   "Andrews, Nicholas SAL-FACULTY FT/PT 03/15/2026 Salary 1,974.75"
+#   "Wiesner, Matthew SAL-FAC TLC 01/15/2026 PtInstSl 365.21"
+_SALARY_ROW = re.compile(
+    r"^(?P<left>.+?)\s+(?P<date>\d{1,2}/\d{1,2}/\d{2,4})\s+(?P<rest>.+?)\s+"
+    r"(?P<amount>\(?[\d,]+\.\d{2}\)?)$"
+)
+
+# G/L labels are printed in upper case; employee names are not.
+_GL_TOKEN = re.compile(r"^(?:SAL|SALARY|WAGE|WAGES|GL)[-A-Z0-9]*$")
+
+
+def _split_name_and_gl(left: str) -> tuple[str, str | None]:
+    """
+    Split "Garcia Perera, Leibny Paola SAL-FACULTY FT/PT" into name and G/L label.
+
+    Prefers an explicit SAL-/SALARY- token; otherwise peels off the trailing run
+    of tokens that contain no lower-case letters.
+    """
+    tokens = left.split()
+    if not tokens:
+        return left.strip(), None
+
+    for idx, token in enumerate(tokens):
+        if _GL_TOKEN.match(token) and idx > 0:
+            return " ".join(tokens[:idx]).strip(), " ".join(tokens[idx:]).strip()
+
+    split_at = len(tokens)
+    while split_at > 1 and not re.search(r"[a-z]", tokens[split_at - 1]):
+        split_at -= 1
+    if split_at < len(tokens):
+        return " ".join(tokens[:split_at]).strip(), " ".join(tokens[split_at:]).strip()
+    return left.strip(), None
+
+
+def _is_person_name(name: str) -> bool:
+    """Reject table furniture that the row patterns can otherwise match."""
+    if not name or len(name) < 2:
+        return False
+    lowered = name.lower()
+    if lowered.startswith(("ref.", "doc", "g/l", "total", "grand", "employee", "report for")):
+        return False
+    return not re.match(r"^[\d#\s.,-]+$", name)
+
+
+def _collect_salary_rows(text: str) -> tuple[dict[str, list[dict]], list[str], dict[str, Decimal]]:
+    """
+    Read the detail and "Total for" rows out of one salary page.
+
+    Returns (details_by_name, names_in_page_order, totals_by_name). Callers
+    assemble across pages, because a single person's rows can straddle a page
+    break with the "Total for" line landing on the following page.
+    """
+    details: dict[str, list[dict]] = {}
+    ordered: list[str] = []
+    totals: dict[str, Decimal] = {}
+
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line or line.startswith("Report for"):
+            continue
+
+        total_match = re.match(r"^Total for\s+(.+?)\s+(\(?[\d,]+\.\d{2}\)?)$", line)
+        if total_match:
+            name = total_match.group(1).strip()
+            amount = clean_text_to_decimal(total_match.group(2))
+            if _is_person_name(name) and amount is not None:
+                totals[name] = amount
+                if name not in ordered:
+                    ordered.append(name)
+            continue
+
+        row_match = _SALARY_ROW.match(line)
+        if not row_match:
+            continue
+        name, gl_account = _split_name_and_gl(row_match.group("left"))
+        if not _is_person_name(name):
+            continue
+
+        if name not in details:
+            details[name] = []
+            if name not in ordered:
+                ordered.append(name)
+        details[name].append(
+            {
+                "date": _parse_date_flexible(row_match.group("date")),
+                "gl": gl_account,
+                "wage": row_match.group("rest").strip() or None,
+                "amount": clean_text_to_decimal(row_match.group("amount")),
+            }
+        )
+
+    return details, ordered, totals
+
+
+def _assemble_allocations(
+    details: dict[str, list[dict]],
+    ordered: list[str],
+    totals: dict[str, Decimal],
+    project_id: str,
+    period: str,
+) -> list[EffortAllocation]:
+    """Turn collected salary rows into one EffortAllocation per person."""
+    allocations: list[EffortAllocation] = []
+
+    for name in ordered:
+        rows = details.get(name, [])
+        if not rows:
+            # A "Total for" line whose detail rows were abbreviated on the page
+            for known, known_rows in details.items():
+                if known != name and (known.startswith(name) or name.startswith(known)):
+                    rows = known_rows
+                    break
+
+        if name in totals:
+            salary = totals[name]
+        else:
+            amounts = [r["amount"] for r in rows if r["amount"] is not None]
+            if not amounts:
+                continue
+            salary = sum(amounts, Decimal("0"))
+
+        dates = [r["date"] for r in rows if r["date"]]
+        gl_account = next((r["gl"] for r in reversed(rows) if r["gl"]), None)
+        wage_type = next((r["wage"] for r in reversed(rows) if r["wage"]), None)
+
+        allocations.append(
+            EffortAllocation(
+                person_name=name,
+                project_id=project_id,
+                period=period,
+                salary_amount=salary,
+                employee_type=parse_employee_type(gl_account or ""),
+                gl_account=gl_account,
+                wage_type=wage_type,
+                pay_period_start=min(dates) if dates else None,
+                pay_period_end=max(dates) if dates else None,
+            )
+        )
+
+    return allocations
+
+
+def _salary_page_context(text: str, report_period: str, report_project_id: str) -> tuple[str, str]:
+    """Grant number and period for a salary page, falling back to report-level values."""
+    grant_match = re.search(r"Grant:\s+(\d+)", text)
+    project_id = grant_match.group(1) if grant_match else report_project_id
+
+    period = report_period
+    header_match = re.search(
+        r"^\s*(" + "|".join(MONTH_NAMES) + r")\s+(\d{4})\s*$", text, re.MULTILINE
+    )
+    if header_match:
+        period = f"{header_match.group(1)} {header_match.group(2)}"
+    return project_id, period
+
+
+def _is_salary_page(text: str) -> bool:
+    """A Sponsored PI Salary Report page (or a continuation of one)."""
+    if "Salary Commitment" in text:
+        return False
+    return "Salary Report" in text or "Total for" in text
 
 
 def parse_personnel_page(
     page, report_period: str = "Unknown", report_project_id: str = "unknown"
 ) -> list[EffortAllocation]:
     """
-    Parse a salary report page to extract personnel effort allocations,
-    including G/L accounts, wage types, and pay-period dates.
+    Parse a Sponsored PI Salary Report page into per-person effort allocations.
+
+    Detail rows carry the G/L account, wage type, and end-of-pay-period date;
+    those are aggregated per person so that retroactive postings (pay periods
+    that closed before the report month) stay distinguishable from current
+    charges. "Total for <name>" supplies the authoritative amount.
+
+    Note that a person whose rows straddle a page break is only complete once
+    the pages are combined; parse_sponsored_report assembles report-wide.
 
     Args:
         page: pdfplumber page object
@@ -275,150 +703,39 @@ def parse_personnel_page(
     Returns list of EffortAllocation objects.
     """
     text = page.extract_text() or ""
-    allocations = []
-
-    # Check if this is a salary page
-    if "Salary Report" not in text and "Total for" not in text:
+    if not _is_salary_page(text):
         return []
 
-    # Extract project identifier from page, fall back to report-level project_id
-    grant_match = re.search(r"Grant:\s+(\d+)", text)
-    project_id = grant_match.group(1) if grant_match else report_project_id
+    project_id, period = _salary_page_context(text, report_period, report_project_id)
+    details, ordered, totals = _collect_salary_rows(text)
+    return _assemble_allocations(details, ordered, totals, project_id, period)
 
-    # Extract period from page header if available
-    date_match = re.search(
-        r"([A-Za-z]+)\s+(\d{4})\s*$", text.split("\n")[1] if len(text.split("\n")) > 1 else ""
-    )
-    if not date_match:
-        date_match = re.search(r"([A-Za-z]+)\s+(\d{4})", text[:500])
 
-    period = f"{date_match.group(1)} {date_match.group(2)}" if date_match else report_period
+# ----------------------------------------------------------------------
+# Salary commitment page
+# ----------------------------------------------------------------------
 
-    lines = text.split("\n")
-    current_gl_account = None
-    current_wage_type = None
-    current_emp_type = EmployeeType.UNKNOWN
+# "Li, Henry SALARY-STUDENT GRADUATE August-2026 March-2027 31,416.72"
+_COMMITMENT_ROW = re.compile(
+    r"^(?P<left>.+?)\s+(?P<start>[A-Za-z]+-\d{4})\s+(?P<end>[A-Za-z]+-\d{4})\s+"
+    r"(?P<amounts>(?:\(?[\d,]+\.\d{2}\)?\s*)+)$"
+)
 
-    # Store transaction details preceding "Total for" lines
-    pending_details: dict[str, list[dict]] = {}
-
-    for line in lines:
-        line_clean = line.strip()
-        if not line_clean:
-            continue
-
-        # Check for G/L account header
-        gl_match = re.search(r"(?:^|\b)G/L\s*(\d{6})\s*[-:]?\s*(.+)", line_clean, re.IGNORECASE)
-        if not gl_match:
-            gl_match = re.search(r"^(\d{6})\s*[-:]\s*(.+)", line_clean)
-        if gl_match:
-            current_gl_account = gl_match.group(1)
-            current_wage_type = gl_match.group(2).strip()
-            current_emp_type = parse_employee_type(current_wage_type)
-
-        # Check for detail / transaction line with date range
-        tx_match = re.search(
-            r"^([A-Za-z\s,\.-]+?)\s+(?:Doc\s+\d+\s+)?(\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}/\d{4})\s+(?:to\s+|-)?\s*(\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}/\d{4})\s+([\d,]+\.\d{2})",
-            line_clean,
-        )
-        if tx_match and not line_clean.startswith("Total for"):
-            pname = tx_match.group(1).strip()
-            if (
-                not pname.startswith("Ref.")
-                and not pname.startswith("Doc")
-                and not pname.startswith("G/L")
-            ):
-                s_dt = _parse_date_flexible(tx_match.group(2))
-                e_dt = _parse_date_flexible(tx_match.group(3))
-                amt = clean_text_to_decimal(tx_match.group(4))
-                pending_details.setdefault(pname, []).append(
-                    {
-                        "start": s_dt,
-                        "end": e_dt,
-                        "amount": amt,
-                        "gl": current_gl_account,
-                        "wage_type": current_wage_type,
-                        "emp_type": current_emp_type,
-                    }
-                )
-
-        # Look for person totals: "Total for Name AMOUNT"
-        total_match = re.search(r"Total for (.*?)\s+([\d,]+\.\d{2})", line_clean)
-        if total_match:
-            name = total_match.group(1).strip()
-
-            # Skip non-person entries
-            if name.startswith("Ref.") or name.startswith("Doc") or re.match(r"^[\d#\s]+$", name):
-                continue
-
-            salary = clean_text_to_decimal(total_match.group(2))
-            if salary:
-                emp_type = current_emp_type
-                gl_acc = current_gl_account
-                wage_tp = current_wage_type
-                pay_start = None
-                pay_end = None
-
-                # Find any transaction details for this person
-                matching_txs = pending_details.get(name) or []
-                if not matching_txs:
-                    for k, v in pending_details.items():
-                        if name.split(",")[0].lower() in k.lower():
-                            matching_txs = v
-                            break
-
-                if matching_txs:
-                    starts = [t["start"] for t in matching_txs if t["start"]]
-                    ends = [t["end"] for t in matching_txs if t["end"]]
-                    if starts:
-                        pay_start = min(starts)
-                    if ends:
-                        pay_end = max(ends)
-                    if matching_txs[-1].get("gl"):
-                        gl_acc = matching_txs[-1]["gl"]
-                    if matching_txs[-1].get("wage_type"):
-                        wage_tp = matching_txs[-1]["wage_type"]
-                    if matching_txs[-1].get("emp_type") != EmployeeType.UNKNOWN:
-                        emp_type = matching_txs[-1]["emp_type"]
-
-                # Fallback backward search if employee type is still unknown
-                if emp_type == EmployeeType.UNKNOWN:
-                    for prev_line in lines[: lines.index(line)][::-1]:
-                        if name.split(",")[0] in prev_line:
-                            if "FACULTY" in prev_line:
-                                emp_type = EmployeeType.FACULTY
-                            elif "POSTDOC" in prev_line:
-                                emp_type = EmployeeType.POSTDOC
-                            elif "STUDENT GRAD" in prev_line or "STU POSTDOC" in prev_line:
-                                emp_type = EmployeeType.GRAD_STUDENT
-                            elif "MASTERS" in prev_line:
-                                emp_type = EmployeeType.MASTERS_STUDENT
-                            elif "STAFF" in prev_line or "NADM" in prev_line:
-                                emp_type = EmployeeType.STAFF
-                            break
-
-                allocations.append(
-                    EffortAllocation(
-                        person_name=name,
-                        project_id=project_id,
-                        period=period,
-                        salary_amount=salary,
-                        employee_type=emp_type,
-                        gl_account=gl_acc,
-                        wage_type=wage_tp,
-                        pay_period_start=pay_start,
-                        pay_period_end=pay_end,
-                    )
-                )
-
-    return allocations
+# Older layouts use calendar dates for the encumbrance window.
+_COMMITMENT_ROW_DATED = re.compile(
+    r"^(?P<left>.+?)\s+(?P<start>\d{1,2}/\d{1,2}/\d{2,4})\s+(?:to\s+|-\s*)?"
+    r"(?P<end>\d{1,2}/\d{1,2}/\d{2,4})\s+(?P<amounts>(?:\(?[\d,]+\.\d{2}\)?\s*)+)$"
+)
 
 
 def parse_commitment_page(
     page, report_period: str = "Unknown", report_project_id: str = "unknown"
 ) -> list[CommitmentDetail]:
     """
-    Parse a Salary Commitment / Encumbrance page to extract individual commitment details.
+    Parse a Sponsored PI Salary Commitment Report page.
+
+    Each row names one person, their encumbrance window, and the committed
+    amount -- the future salary the sponsor's funds are already obligated to.
 
     Args:
         page: pdfplumber page object
@@ -428,9 +745,7 @@ def parse_commitment_page(
     Returns list of CommitmentDetail objects.
     """
     text = page.extract_text() or ""
-    commitments = []
 
-    # Check if this is a commitment page
     is_commitment_page = (
         "Salary Commitment" in text
         or "Commitment Report" in text
@@ -440,76 +755,46 @@ def parse_commitment_page(
     if not is_commitment_page:
         return []
 
-    lines = text.split("\n")
-    current_emp_type = EmployeeType.UNKNOWN
+    commitments: list[CommitmentDetail] = []
 
-    for line in lines:
-        line_clean = line.strip()
-        if not line_clean:
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line or line.startswith(("Total", "Grand", "Report for", "Employee")):
             continue
 
-        # Check for G/L account header to determine employee type
-        gl_match = re.search(r"(?:^|\b)G/L\s*(\d{6})\s*[-:]?\s*(.+)", line_clean, re.IGNORECASE)
-        if not gl_match:
-            gl_match = re.search(r"^(\d{6})\s*[-:]\s*(.+)", line_clean)
-        if gl_match:
-            current_emp_type = parse_employee_type(gl_match.group(2))
-
-        # Format 1: "Name [Doc] Start End Salary [Fringe] [IDC]"
-        row_match = re.search(
-            r"^([A-Za-z\s,\.-]+?)\s+(?:Doc\s+\d+\s+)?(\d{1,2}/\d{1,2}/\d{2,4})\s+(?:to\s+|-)?\s*(\d{1,2}/\d{1,2}/\d{2,4})\s+([\d,]+\.\d{2})(?:\s+([\d,]+\.\d{2}))?(?:\s+([\d,]+\.\d{2}))?",
-            line_clean,
-        )
-        if row_match and not line_clean.startswith("Total") and not line_clean.startswith("Grand"):
-            pname = row_match.group(1).strip()
-            if (
-                not pname.startswith("Ref.")
-                and not pname.startswith("Doc")
-                and not pname.startswith("G/L")
-            ):
-                s_dt = _parse_date_flexible(row_match.group(2))
-                e_dt = _parse_date_flexible(row_match.group(3))
-                sal_comm = clean_text_to_decimal(row_match.group(4)) or Decimal("0")
-                fr_comm = clean_text_to_decimal(row_match.group(5)) or Decimal("0")
-                idc_comm = clean_text_to_decimal(row_match.group(6)) or Decimal("0")
-
-                commitments.append(
-                    CommitmentDetail(
-                        person_name=pname,
-                        employee_type=current_emp_type,
-                        salary_committed=sal_comm,
-                        fringe_committed=fr_comm,
-                        idc_committed=idc_comm,
-                        encumbrance_start=s_dt,
-                        encumbrance_end=e_dt,
-                    )
-                )
+        match = _COMMITMENT_ROW.match(line) or _COMMITMENT_ROW_DATED.match(line)
+        if not match:
             continue
 
-        # Format 2: "Total for Name Salary Fringe IDC" or "Total for Name Salary"
-        total_match = re.search(
-            r"Total for\s+([A-Za-z\s,\.-]+?)\s+([\d,]+\.\d{2})(?:\s+([\d,]+\.\d{2}))?(?:\s+([\d,]+\.\d{2}))?",
-            line_clean,
-        )
-        if total_match:
-            pname = total_match.group(1).strip()
-            sal_comm = clean_text_to_decimal(total_match.group(2)) or Decimal("0")
-            fr_comm = clean_text_to_decimal(total_match.group(3)) or Decimal("0")
-            idc_comm = clean_text_to_decimal(total_match.group(4)) or Decimal("0")
+        name, gl_account = _split_name_and_gl(match.group("left"))
+        if not _is_person_name(name):
+            continue
 
-            # If not already recorded in commitments for this person
-            if not any(c.person_name == pname for c in commitments):
-                commitments.append(
-                    CommitmentDetail(
-                        person_name=pname,
-                        employee_type=current_emp_type,
-                        salary_committed=sal_comm,
-                        fringe_committed=fr_comm,
-                        idc_committed=idc_comm,
-                    )
-                )
+        amounts = [clean_text_to_decimal(a) or Decimal("0") for a in match.group("amounts").split()]
+        start = _parse_date_flexible(match.group("start"))
+        end = _parse_date_flexible(match.group("end"))
+        # Month-granularity windows run to the end of the closing month.
+        if end and re.match(r"^[A-Za-z]+-\d{4}$", match.group("end")):
+            end = month_end(end)
+
+        commitments.append(
+            CommitmentDetail(
+                person_name=name,
+                employee_type=parse_employee_type(gl_account or ""),
+                salary_committed=amounts[0] if amounts else Decimal("0"),
+                fringe_committed=amounts[1] if len(amounts) > 1 else Decimal("0"),
+                idc_committed=amounts[2] if len(amounts) > 2 else Decimal("0"),
+                encumbrance_start=start,
+                encumbrance_end=end,
+            )
+        )
 
     return commitments
+
+
+# ----------------------------------------------------------------------
+# Whole-report entry point
+# ----------------------------------------------------------------------
 
 
 def parse_sponsored_report(
@@ -527,99 +812,83 @@ def parse_sponsored_report(
     file_path = Path(file_path)
 
     spending_report = None
-    all_personnel = []
-    all_commitments = []
+    all_personnel: list[EffortAllocation] = []
+    all_commitments: list[CommitmentDetail] = []
+
+    def amount(summary: dict, key: str) -> Decimal:
+        return summary.get(key) or Decimal("0")
 
     try:
         with pdfplumber.open(file_path) as pdf:
-            # Page 1: Summary
-            if pdf.pages:
-                summary = parse_sponsored_summary(pdf.pages[0])
+            if not pdf.pages:
+                return None, []
 
-                spending_report = SpendingReport(
-                    project_id=summary.get("grant_number", "unknown"),
-                    period=summary.get("period", "Unknown"),
-                    year=summary.get("year", 0),
-                    month=summary.get("month", 0),
-                    total_spent=summary.get("total_spent", Decimal("0")) or Decimal("0"),
-                    total_committed=summary.get("total_committed", Decimal("0")) or Decimal("0"),
-                    total_spent_and_committed=summary.get("total_spent_and_committed", Decimal("0"))
-                    or Decimal("0"),
-                    indirect_spent=summary.get("indirect_spent", Decimal("0")) or Decimal("0"),
-                    budget_utilized_pct=summary.get("budget_utilized_pct"),
-                    total_month=summary.get("total_month"),
-                    # Category breakdowns (cumulative)
-                    salary_spent=summary.get("salary_spent", Decimal("0")) or Decimal("0"),
-                    fringe_spent=summary.get("fringe_spent", Decimal("0")) or Decimal("0"),
-                    tuition_spent=summary.get("tuition_spent", Decimal("0")) or Decimal("0"),
-                    insurance_spent=summary.get("insurance_spent", Decimal("0")) or Decimal("0"),
-                    service_center_spent=summary.get("service_center_spent", Decimal("0"))
-                    or Decimal("0"),
-                    travel_spent=summary.get("travel_spent", Decimal("0")) or Decimal("0"),
-                    travel_foreign_spent=summary.get("travel_foreign_spent", Decimal("0"))
-                    or Decimal("0"),
-                    supplies_spent=summary.get("supplies_spent", Decimal("0")) or Decimal("0"),
-                    equipment_spent=summary.get("equipment_spent", Decimal("0")) or Decimal("0"),
-                    subcontracts_spent=summary.get("subcontracts_spent", Decimal("0"))
-                    or Decimal("0"),
-                    consultant_spent=summary.get("consultant_spent", Decimal("0")) or Decimal("0"),
-                    other_spent=summary.get("other_spent", Decimal("0")) or Decimal("0"),
-                    # Monthly (single-month) category amounts
-                    salary_month=summary.get("salary_month"),
-                    fringe_month=summary.get("fringe_month"),
-                    tuition_month=summary.get("tuition_month"),
-                    insurance_month=summary.get("insurance_month"),
-                    service_center_month=summary.get("service_center_month"),
-                    travel_month=summary.get("travel_month"),
-                    travel_foreign_month=summary.get("travel_foreign_month"),
-                    supplies_month=summary.get("supplies_month"),
-                    equipment_month=summary.get("equipment_month"),
-                    subcontracts_month=summary.get("subcontracts_month"),
-                    consultant_month=summary.get("consultant_month"),
-                    other_month=summary.get("other_month"),
-                    indirect_month=summary.get("indirect_month"),
-                    # Category commitments
-                    salary_committed=summary.get("salary_committed", Decimal("0")) or Decimal("0"),
-                    fringe_committed=summary.get("fringe_committed", Decimal("0")) or Decimal("0"),
-                    tuition_committed=summary.get("tuition_committed", Decimal("0"))
-                    or Decimal("0"),
-                    insurance_committed=summary.get("insurance_committed", Decimal("0"))
-                    or Decimal("0"),
-                    service_center_committed=summary.get("service_center_committed", Decimal("0"))
-                    or Decimal("0"),
-                    travel_committed=summary.get("travel_committed", Decimal("0")) or Decimal("0"),
-                    travel_foreign_committed=summary.get("travel_foreign_committed", Decimal("0"))
-                    or Decimal("0"),
-                    supplies_committed=summary.get("supplies_committed", Decimal("0"))
-                    or Decimal("0"),
-                    equipment_committed=summary.get("equipment_committed", Decimal("0"))
-                    or Decimal("0"),
-                    subcontracts_committed=summary.get("subcontracts_committed", Decimal("0"))
-                    or Decimal("0"),
-                    consultant_committed=summary.get("consultant_committed", Decimal("0"))
-                    or Decimal("0"),
-                    other_committed=summary.get("other_committed", Decimal("0")) or Decimal("0"),
-                    # Funded ceiling and revenue
-                    funded_ceiling=summary.get("funded_ceiling"),
-                    total_revenue_received=summary.get("total_revenue_received"),
-                    revenue_month=summary.get("revenue_month"),
-                    # Award metadata
-                    budget_start_date=summary.get("budget_start_date"),
-                    budget_end_date=summary.get("budget_end_date"),
-                    grant_end_date=summary.get("grant_end_date"),
-                    grantor_code=summary.get("grantor_code"),
-                    stated_idc_rate=summary.get("stated_idc_rate"),
+            summary = parse_sponsored_summary(pdf.pages[0])
+
+            spending_report = SpendingReport(
+                project_id=summary.get("grant_number", "unknown"),
+                period=summary.get("period", "Unknown"),
+                year=summary.get("year", 0),
+                month=summary.get("month", 0),
+                total_spent=amount(summary, "total_spent"),
+                total_committed=amount(summary, "total_committed"),
+                total_spent_and_committed=amount(summary, "total_spent_and_committed"),
+                indirect_spent=amount(summary, "indirect_spent"),
+                budget_utilized_pct=summary.get("budget_utilized_pct"),
+                total_month=summary.get("total_month"),
+                indirect_month=summary.get("indirect_month"),
+                funded_ceiling=summary.get("funded_ceiling"),
+                total_revenue_received=summary.get("total_revenue_received"),
+                revenue_month=summary.get("revenue_month"),
+                budget_start_date=summary.get("budget_start_date"),
+                budget_end_date=summary.get("budget_end_date"),
+                grant_end_date=summary.get("grant_end_date"),
+                grantor_code=summary.get("grantor_code"),
+                stated_idc_rate=summary.get("stated_idc_rate"),
+            )
+
+            for prefix in set(CATEGORY_LABELS.values()):
+                setattr(spending_report, f"{prefix}_spent", amount(summary, f"{prefix}_spent"))
+                setattr(spending_report, f"{prefix}_month", summary.get(f"{prefix}_month"))
+                setattr(
+                    spending_report,
+                    f"{prefix}_committed",
+                    amount(summary, f"{prefix}_committed"),
                 )
 
-            # All pages: Personnel & Commitments
             report_period = summary.get("period", "Unknown")
             report_project_id = summary.get("grant_number", "unknown")
-            for page in pdf.pages:
-                personnel = parse_personnel_page(page, report_period, report_project_id)
-                all_personnel.extend(personnel)
 
-                commitments = parse_commitment_page(page, report_period, report_project_id)
-                all_commitments.extend(commitments)
+            # Salary rows are assembled across every salary page at once: a
+            # person's detail rows and their "Total for" line can land on
+            # different pages, and assembling per page would both double-count
+            # that person and lose their earlier pay periods.
+            details: dict[str, list[dict]] = {}
+            ordered: list[str] = []
+            totals: dict[str, Decimal] = {}
+            salary_project_id, salary_period = report_project_id, report_period
+
+            for page in pdf.pages:
+                page_text = page.extract_text() or ""
+                if _is_salary_page(page_text):
+                    salary_project_id, salary_period = _salary_page_context(
+                        page_text, report_period, report_project_id
+                    )
+                    page_details, page_ordered, page_totals = _collect_salary_rows(page_text)
+                    for name, rows in page_details.items():
+                        details.setdefault(name, []).extend(rows)
+                    for name in page_ordered:
+                        if name not in ordered:
+                            ordered.append(name)
+                    totals.update(page_totals)
+
+                all_commitments.extend(
+                    parse_commitment_page(page, report_period, report_project_id)
+                )
+
+            all_personnel = _assemble_allocations(
+                details, ordered, totals, salary_project_id, salary_period
+            )
 
             if spending_report and all_commitments:
                 spending_report.commitment_details = all_commitments

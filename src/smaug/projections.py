@@ -869,134 +869,206 @@ def optimize_mitigations(
     - Plan B: Freeze travel/expenses + 25% reduction on all personnel on this project
     - Plan C: Freeze travel/expenses + 50% reduction on all personnel on this project
 
+    Runway is measured against the funded ceiling -- the money the sponsor has
+    actually obligated -- and bounded by the award end date, so a plan that
+    carries the project to the end of the award is reported as such rather than
+    as an arbitrarily long extension.
+
     Returns:
         List of 3 styled mitigation plans (easy, moderate, deep).
     """
     from datetime import date
 
-    from .budget_resolution import resolve_project_budget
+    from .budget_resolution import resolve_award_end_date, resolve_funded_ceiling
     from .cli._util import Anonymizer
 
-    # 1. Compute baseline stop-work date
     travel_items = store.get_project_travel(project_id)
     expense_items = store.get_project_expenses(project_id)
 
     _rates, original_personnel = load_personnel_config(config_path)
 
-    def get_stop_work_months(personnel_list, travel_list, expense_list) -> float:
-        # Generate projections up to 36 months
+    start = date.today().replace(day=1)
+    award_end, _ = resolve_award_end_date(store, project_id)
+    horizon = 36
+    if award_end and award_end > start:
+        horizon = min(
+            36,
+            max(1, (award_end.year - start.year) * 12 + (award_end.month - start.month) + 1),
+        )
+
+    ceiling = budget_override
+    ceiling_source = "override"
+    if ceiling is None:
+        ceiling, ceiling_source = resolve_funded_ceiling(store, project_id, store.data_dir)
+
+    project_data = store.get_project(project_id)
+    spent_so_far = Decimal("0")
+    outstanding_commitments = Decimal("0")
+    if project_data and project_data.spending:
+        latest = max(project_data.spending, key=lambda r: (r.year, r.month))
+        spent_so_far = latest.total_spent
+        outstanding_commitments = latest.total_committed or Decimal("0")
+
+    available_funds = max(Decimal("0"), (ceiling or Decimal("0")) - spent_so_far)
+
+    def get_stop_work_months(
+        personnel_list, travel_list, expense_list
+    ) -> tuple[float, bool, float]:
+        """
+        Months of runway, whether the award ends before the funds do, and the
+        funds left over at the end of the award.
+
+        Once several plans all carry the project to the award end, the runway
+        figure alone stops separating them; the leftover is what still does.
+        """
+        if not ceiling or ceiling <= Decimal("0"):
+            return float(horizon), True, 0.0
+
         projections = project_spending(
             project_id=project_id,
             config_path=config_path,
-            start_date=date.today().replace(day=1),
-            months=36,
+            start_date=start,
+            months=horizon,
             travel_items=travel_list,
             expense_items=expense_list,
             personnel_overrides=personnel_list,
         )
-        # Calculate when remaining budget is exhausted
-        project_data = store.get_project(project_id)
-        if not project_data:
-            return 12.0
-
-        resolved_budget = budget_override
-        if resolved_budget is None:
-            resolved_budget, _ = resolve_project_budget(store, project_id, store.data_dir)
-
-        if not resolved_budget or resolved_budget <= Decimal("0"):
-            return 12.0
-
-        remaining_budget = resolved_budget
-        spent_so_far = Decimal("0")
-        if project_data.spending:
-            spent_so_far = project_data.spending[-1].total_spent
-
-        available_funds = max(Decimal("0"), remaining_budget - spent_so_far)
 
         cumulative_spent = Decimal("0")
+        stop_at: float | None = None
         for idx, p in enumerate(projections, 1):
             cumulative_spent += p.total
-            if cumulative_spent >= available_funds:
+            if stop_at is None and cumulative_spent >= available_funds:
                 prev_spent = cumulative_spent - p.total
                 needed = available_funds - prev_spent
                 fraction = float(needed / p.total) if p.total > 0 else 0.0
-                return float(idx - 1) + fraction
-        return 36.0
+                stop_at = float(idx - 1) + fraction
 
-    baseline_months = get_stop_work_months(original_personnel, travel_items, expense_items)
+        leftover = float(available_funds - cumulative_spent)
+        if stop_at is not None:
+            return stop_at, False, leftover
+        # Funds outlast the award: runway is capped by the award, not the money.
+        return float(len(projections)), True, leftover
+
+    baseline_months, baseline_capped, baseline_leftover = get_stop_work_months(
+        original_personnel, travel_items, expense_items
+    )
+
+    def effort_levers(personnel_list, factor: Decimal) -> list[str]:
+        """
+        One lever per person, describing their effort over the forecast window.
+
+        Assignments are stored as date-bounded segments, so a person whose
+        effort steps up over time has several rows for one project; listing each
+        row reads as duplicate people. Zero-effort assignments are omitted --
+        cutting 0% to 0% is not a lever.
+        """
+        levers = []
+        window_end = date(
+            start.year + (start.month - 1 + horizon) // 12,
+            (start.month - 1 + horizon) % 12 + 1,
+            1,
+        )
+        for person in personnel_list:
+            efforts = []
+            for a in person.assignments:
+                if a.project != project_id:
+                    continue
+                if a.end and a.end <= start:
+                    continue
+                if a.start and a.start >= window_end:
+                    continue
+                if person.departure and person.departure <= start:
+                    continue
+                efforts.append(a.effort)
+
+            active = [e for e in efforts if e > 0]
+            if not active:
+                continue
+
+            low, high = min(active), max(active)
+            before = f"{high * 100:.0f}%" if low == high else f"{low * 100:.0f}-{high * 100:.0f}%"
+            after_low, after_high = low * factor, high * factor
+            after = (
+                f"{after_high * 100:.0f}%"
+                if low == high
+                else f"{after_low * 100:.0f}-{after_high * 100:.0f}%"
+            )
+            levers.append(f"Reduce {Anonymizer.anonymize(person.name)} effort: {before} -> {after}")
+        return levers
+
+    def scale_effort(personnel_list, factor: Decimal):
+        scaled = copy.deepcopy(personnel_list)
+        for person in scaled:
+            for a in person.assignments:
+                if a.project == project_id:
+                    a.effort = a.effort * factor
+        return scaled
 
     plans = []
 
     # Plan A: Non-Personnel Cuts Only
-    plan_easy_travel = [t for t in travel_items if t.status.value != "actualized"]
-    frozen_travel = []
-    for t in plan_easy_travel:
-        frozen_travel.append(f"Freeze travel: {t.description} (${t.amount:,.2f})")
+    frozen_travel = [
+        f"Freeze travel: {t.description} (${t.amount:,.2f})"
+        for t in travel_items
+        if t.status.value != "actualized"
+    ]
+    frozen_expenses = [
+        (
+            f"Pause expense: {e.description} (${e.amount:,.2f}/mo)"
+            if e.is_recurring
+            else f"Cancel expense: {e.description} (${e.amount:,.2f})"
+        )
+        for e in expense_items
+    ]
 
-    frozen_expenses = []
-    for e in expense_items:
-        if e.is_recurring:
-            frozen_expenses.append(f"Pause expense: {e.description} (${e.amount:,.2f}/mo)")
-        else:
-            frozen_expenses.append(f"Cancel expense: {e.description} (${e.amount:,.2f})")
+    def add_plan(name: str, description: str, levers: list[str], factor: Decimal | None):
+        personnel = (
+            original_personnel if factor is None else scale_effort(original_personnel, factor)
+        )
+        months, capped, leftover = get_stop_work_months(personnel, [], [])
+        plans.append(
+            {
+                "name": name,
+                "description": description,
+                "levers": levers,
+                "extended_stop_work_months": months,
+                "extension": max(0.0, months - baseline_months),
+                "funded_through_award_end": capped,
+                "funds_left_at_award_end": round(leftover, 2),
+                "shortfall_at_award_end": round(-leftover, 2) if leftover < 0 else 0.0,
+            }
+        )
 
-    easy_months = get_stop_work_months(original_personnel, [], [])
-    plans.append(
-        {
-            "name": "Plan A: Non-Personnel Cuts Only",
-            "description": "Freeze all planned travel and pause all recurring expenses.",
-            "levers": frozen_travel + frozen_expenses,
-            "extended_stop_work_months": easy_months,
-            "extension": max(0.0, easy_months - baseline_months),
-        }
+    add_plan(
+        "Plan A: Non-Personnel Cuts Only",
+        "Freeze all planned travel and pause all recurring expenses.",
+        frozen_travel + frozen_expenses,
+        None,
+    )
+    add_plan(
+        "Plan B: Moderate Cuts",
+        "Freeze travel/expenses and reduce personnel effort by 25%.",
+        frozen_travel + frozen_expenses + effort_levers(original_personnel, Decimal("0.75")),
+        Decimal("0.75"),
+    )
+    add_plan(
+        "Plan C: Deep Cuts",
+        "Freeze travel/expenses and reduce personnel effort by 50%.",
+        frozen_travel + frozen_expenses + effort_levers(original_personnel, Decimal("0.50")),
+        Decimal("0.50"),
     )
 
-    # Plan B: Moderate Cuts
-    import copy
-
-    mod_personnel = copy.deepcopy(original_personnel)
-    levers_mod = list(frozen_travel + frozen_expenses)
-    for p in mod_personnel:
-        for a in p.assignments:
-            if a.project == project_id:
-                old_effort = a.effort
-                a.effort = old_effort * Decimal("0.75")
-                levers_mod.append(
-                    f"Reduce {Anonymizer.anonymize(p.name)} effort: {old_effort * 100:.0f}% -> {a.effort * 100:.0f}%"
-                )
-
-    mod_months = get_stop_work_months(mod_personnel, [], [])
-    plans.append(
-        {
-            "name": "Plan B: Moderate Cuts",
-            "description": "Freeze travel/expenses and reduce personnel effort by 25%.",
-            "levers": levers_mod,
-            "extended_stop_work_months": mod_months,
-            "extension": max(0.0, mod_months - baseline_months),
-        }
-    )
-
-    # Plan C: Deep Cuts
-    deep_personnel = copy.deepcopy(original_personnel)
-    levers_deep = list(frozen_travel + frozen_expenses)
-    for p in deep_personnel:
-        for a in p.assignments:
-            if a.project == project_id:
-                old_effort = a.effort
-                a.effort = old_effort * Decimal("0.50")
-                levers_deep.append(
-                    f"Reduce {Anonymizer.anonymize(p.name)} effort: {old_effort * 100:.0f}% -> {a.effort * 100:.0f}%"
-                )
-
-    deep_months = get_stop_work_months(deep_personnel, [], [])
-    plans.append(
-        {
-            "name": "Plan C: Deep Cuts",
-            "description": "Freeze travel/expenses and reduce personnel effort by 50%.",
-            "levers": levers_deep,
-            "extended_stop_work_months": deep_months,
-            "extension": max(0.0, deep_months - baseline_months),
-        }
-    )
+    for plan in plans:
+        plan["baseline_stop_work_months"] = baseline_months
+        plan["baseline_capped_by_award_end"] = baseline_capped
+        plan["baseline_shortfall_at_award_end"] = (
+            round(-baseline_leftover, 2) if baseline_leftover < 0 else 0.0
+        )
+        plan["outstanding_commitments"] = float(outstanding_commitments)
+        plan["ceiling"] = float(ceiling) if ceiling else None
+        plan["ceiling_source"] = ceiling_source
+        plan["available_funds"] = float(available_funds)
+        plan["horizon_months"] = horizon
 
     return plans

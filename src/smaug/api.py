@@ -10,7 +10,7 @@ CLI commands delegate here for computation, then handle formatting.
 
 import contextlib
 import sys
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,10 +27,17 @@ def _dec(val: Decimal | None) -> float | None:
 
 
 def _date_str(d: date | None) -> str | None:
-    """Convert date to ISO string for JSON serialization."""
+    """Convert date to a YYYY-MM string for JSON serialization."""
     if d is None:
         return None
     return d.strftime("%Y-%m")
+
+
+def _date_full(d: date | None) -> str | None:
+    """Convert date to a full ISO string, for dates where the day is meaningful."""
+    if d is None:
+        return None
+    return d.isoformat()
 
 
 class SmaugAPI:
@@ -97,9 +104,10 @@ class SmaugAPI:
             if isinstance(value, str):
                 # Replace any real names with their anonymized form.
                 # Process longest names first to avoid partial replacements.
-                for real_name in sorted(Anonymizer._real_to_anon, key=len, reverse=True):
+                scrub_map = Anonymizer.scrub_map()
+                for real_name in sorted(scrub_map, key=len, reverse=True):
                     if real_name in value:
-                        value = value.replace(real_name, Anonymizer._real_to_anon[real_name])
+                        value = value.replace(real_name, scrub_map[real_name])
                 return value
             if isinstance(value, dict):
                 return {k: _scrub(v) for k, v in value.items()}
@@ -108,6 +116,13 @@ class SmaugAPI:
             return value
 
         return _scrub(result)  # type: ignore[return-value]
+
+    @staticmethod
+    def _anon(name: str | None) -> str | None:
+        """Anonymized display name, when anonymization is enabled."""
+        from .cli._util import Anonymizer
+
+        return Anonymizer.anonymize(name)
 
     @staticmethod
     @contextlib.contextmanager
@@ -146,7 +161,13 @@ class SmaugAPI:
 
         Returns:
             List of dicts with keys: id, name, status, end_date, budget,
-            spent, pct_spent, monthly_burn, projected_total, projected_remaining.
+            funded_ceiling, ceiling_source, spent, committed, pct_spent,
+            monthly_burn, projection_through, projected_total,
+            projected_remaining.
+
+            ``budget`` is the authorized total; ``funded_ceiling`` is what the
+            sponsor has actually obligated, and is what ``projected_remaining``
+            and ``pct_spent`` are measured against.
         """
         from .projections import load_personnel_config, project_monthly_costs
 
@@ -168,7 +189,11 @@ class SmaugAPI:
         if config_path.exists():
             rates, personnel = load_personnel_config(config_path)
 
-        from .budget_resolution import resolve_project_budget
+        from .budget_resolution import (
+            resolve_award_end_date,
+            resolve_funded_ceiling,
+            resolve_project_budget,
+        )
 
         results = []
         for project_id in project_ids:
@@ -177,15 +202,20 @@ class SmaugAPI:
                 continue
 
             budget, _ = resolve_project_budget(store, project_id, self._data_dir)
+            ceiling, ceiling_source = resolve_funded_ceiling(store, project_id, self._data_dir)
 
             spent = Decimal("0")
+            committed = Decimal("0")
             if data.spending:
                 latest = max(data.spending, key=lambda r: (r.year, r.month))
                 spent = latest.total_spent
+                committed = latest.total_committed or Decimal("0")
 
             monthly_burn = Decimal("0")
             proj_total = Decimal("0")
-            project_end = data.project.end_date
+            # The sponsor's reported award end supersedes the manifest, which
+            # goes stale whenever the award is extended.
+            project_end, _end_source = resolve_award_end_date(store, project_id)
 
             if rates and personnel and data.project.status == ProjectStatus.ACTIVE:
                 with contextlib.suppress(Exception):
@@ -214,19 +244,26 @@ class SmaugAPI:
                         else:
                             current = current.replace(month=current.month + 1)
 
-            remaining = budget - spent - proj_total if budget else Decimal("0")
-            pct_spent = float(spent / budget * 100) if budget and spent else 0.0
+            # Remaining runway is bounded by what the sponsor has obligated,
+            # not by what the award is authorized for across all option years.
+            spendable = ceiling if ceiling > Decimal("0") else budget
+            remaining = spendable - spent - proj_total if spendable else Decimal("0")
+            pct_spent = float(spent / spendable * 100) if spendable and spent else 0.0
 
             results.append(
                 {
                     "id": project_id,
                     "name": data.project.name,
                     "status": data.project.status.value,
-                    "end_date": _date_str(project_end),
+                    "end_date": _date_full(project_end),
                     "budget": _dec(budget),
+                    "funded_ceiling": _dec(ceiling) if ceiling > Decimal("0") else None,
+                    "ceiling_source": ceiling_source if ceiling > Decimal("0") else None,
                     "spent": _dec(spent),
+                    "committed": _dec(committed),
                     "pct_spent": round(pct_spent, 1),
                     "monthly_burn": _dec(monthly_burn),
+                    "projection_through": _date_full(project_end),
                     "projected_total": _dec(proj_total),
                     "projected_remaining": _dec(remaining),
                 }
@@ -979,15 +1016,21 @@ class SmaugAPI:
     def stopwork_forecast(self, project: str, ceiling: float | None = None) -> dict:
         """Predict fund exhaustion date under current spend rate.
 
+        Measured against the funded ceiling rather than the authorized budget,
+        and never projected past the award end date.
+
         Args:
             project: Project short name.
             ceiling: Override funding ceiling amount.
 
         Returns:
-            Dict with keys: project, ceiling, ceiling_source,
-            cumulative_spent, stop_month, stop_day, monthly_projections.
+            Dict with keys: project, ceiling, ceiling_source, cumulative_spent,
+            outstanding_commitments, spent_and_committed, already_over_ceiling,
+            over_ceiling_amount, as_of, award_end_date, award_end_source,
+            forecast_horizon_months, stop_month, stop_day, commitment_details,
+            monthly_projections.
         """
-        from .budget_resolution import resolve_project_budget
+        from .budget_resolution import resolve_award_end_date, resolve_funded_ceiling
         from .projections import project_spending
 
         store = self._get_store()
@@ -998,20 +1041,16 @@ class SmaugAPI:
         if not data.spending:
             return {"error": f"No spending reports found for {project}"}
 
-        latest = data.spending[-1]
+        latest = max(data.spending, key=lambda r: (r.year, r.month))
 
         if ceiling is not None:
             effective_ceiling = Decimal(str(ceiling))
             ceiling_source = "user-provided"
         else:
-            b_amt, b_src = resolve_project_budget(store, project, self._data_dir)
-            if b_amt > Decimal("0"):
-                effective_ceiling = b_amt
-                ceiling_source = b_src
-            elif latest.funded_ceiling:
-                effective_ceiling = latest.funded_ceiling
-                ceiling_source = "report"
-            else:
+            effective_ceiling, ceiling_source = resolve_funded_ceiling(
+                store, project, self._data_dir
+            )
+            if effective_ceiling <= Decimal("0"):
                 return {"error": "No funded ceiling or budget found"}
 
         cumulative = latest.total_spent
@@ -1027,11 +1066,23 @@ class SmaugAPI:
         else:
             start = start.replace(month=start.month + 1)
 
+        # Never forecast past the end of the award: months beyond it are not
+        # spending the project can do, and reporting them as "ok" reads as
+        # runway that does not exist.
+        award_end, award_end_source = resolve_award_end_date(store, project)
+        horizon = 60
+        if award_end:
+            horizon = max(
+                1,
+                (award_end.year - start.year) * 12 + (award_end.month - start.month) + 1,
+            )
+            horizon = min(horizon, 60)
+
         projections = project_spending(
             project,
             self._config_path(),
             start_date=start,
-            months=60,
+            months=horizon,
             travel_items=travel_items,
             expense_items=expense_items,
         )
@@ -1073,15 +1124,40 @@ class SmaugAPI:
                 if count_after >= 2:
                     break
 
-        return {
+        # Outstanding commitments are salary the sponsor's funds are already
+        # obligated to; they exhaust the ceiling whether or not anyone projects
+        # further spending.
+        committed = latest.total_committed or Decimal("0")
+        spent_and_committed = latest.total_spent + committed
+        commitments = [
+            {
+                "person": self._anon(c.person_name),
+                "type": c.employee_type.value,
+                "salary_committed": _dec(c.salary_committed),
+                "encumbered_through": _date_full(c.encumbrance_end),
+            }
+            for c in latest.commitment_details
+        ]
+
+        result = {
             "project": project,
             "ceiling": _dec(effective_ceiling),
             "ceiling_source": ceiling_source,
             "cumulative_spent": _dec(latest.total_spent),
+            "outstanding_commitments": _dec(committed),
+            "spent_and_committed": _dec(spent_and_committed),
+            "already_over_ceiling": spent_and_committed > effective_ceiling,
+            "over_ceiling_amount": _dec(max(Decimal("0"), spent_and_committed - effective_ceiling)),
+            "as_of": latest.period,
+            "award_end_date": _date_full(award_end),
+            "award_end_source": award_end_source,
+            "forecast_horizon_months": horizon,
             "stop_month": stop_month,
             "stop_day": stop_day,
+            "commitment_details": commitments,
             "monthly_projections": monthly,
         }
+        return self._sanitize_result(result)
 
     def audit(self, project: str | None = None, months: int = 3, threshold: float = 10.0) -> dict:
         """Flag discrepancies between expected and actual effort.
@@ -2011,7 +2087,14 @@ class SmaugAPI:
     # ------------------------------------------------------------------
 
     def budget_vs_actuals(self, project: str) -> dict:
-        """Compare projected spending against contractual budget ceilings."""
+        """Compare actual and projected spending against contractual budget periods.
+
+        Reports state cumulative spend, so each period's actual is the change in
+        cumulative across it. Any spending that predates the earliest available
+        report is spread across the months it covers and reported under
+        ``opening_balance`` rather than dropped, so ``total_actual`` reconciles
+        to ``cumulative_spent``.
+        """
         from .budget_resolution import resolve_budget_config_path
         from .contractual_budget import load_contractual_budget
         from .projections import load_personnel_config, project_monthly_costs
@@ -2037,6 +2120,47 @@ class SmaugAPI:
 
         today = date.today()
 
+        # Reports state cumulative spend, so a period's actual is the change in
+        # cumulative across it. The earliest report already carries every dollar
+        # spent before it -- for ARTS that is the $544,880.73 opening balance --
+        # and differencing alone drops that silently. Spread it across the
+        # months it actually covers instead, and report what was spread.
+        reports = sorted(data.spending, key=lambda r: (r.year, r.month))
+        opening_balance = Decimal("0")
+        opening_start: date | None = None
+        opening_end: date | None = None
+        opening_months = 0
+
+        if reports:
+            first = reports[0]
+            first_month = date(first.year, first.month, 1)
+            opening_balance = first.total_spent - (first.total_month or Decimal("0"))
+            if opening_balance > Decimal("0"):
+                award_start = first.budget_start_date or contract.start_date
+                if award_start and award_start < first_month:
+                    opening_start = award_start.replace(day=1)
+                    opening_end = first_month - timedelta(days=1)
+                    opening_months = (first_month.year - opening_start.year) * 12 + (
+                        first_month.month - opening_start.month
+                    )
+            if opening_months <= 0:
+                opening_balance = Decimal("0")
+
+        def cumulative_at(as_of: date) -> Decimal:
+            """Cumulative spend through ``as_of``, including unreported opening spend."""
+            reported = [r for r in reports if date(r.year, r.month, 1) <= as_of]
+            if reported:
+                return max(reported, key=lambda r: (r.year, r.month)).total_spent
+
+            # Before the first report: pro-rate the opening balance by month.
+            if not opening_months or opening_start is None or as_of < opening_start:
+                return Decimal("0")
+            elapsed = (
+                (as_of.year - opening_start.year) * 12 + (as_of.month - opening_start.month) + 1
+            )
+            elapsed = min(elapsed, opening_months)
+            return opening_balance * Decimal(elapsed) / Decimal(opening_months)
+
         periods_out = []
         total_budget = Decimal("0")
         total_actual = Decimal("0")
@@ -2054,34 +2178,9 @@ class SmaugAPI:
             projected_amt = Decimal("0")
 
             if is_past or is_current:
-                period_reports = [
-                    r
-                    for r in data.spending
-                    if period.start <= date(r.year, r.month, 1) <= period.end
-                ]
-                if period_reports:
-                    latest = max(period_reports, key=lambda r: (r.year, r.month))
-                    earliest = min(period_reports, key=lambda r: (r.year, r.month))
-
-                    if period.year_num == 1:
-                        actual_amt = latest.total_spent
-                    else:
-                        prior_period = contract.get_period_by_year(period.year_num - 1)
-                        prior_ending = Decimal("0")
-                        if prior_period:
-                            prior_reports = [
-                                r
-                                for r in data.spending
-                                if prior_period.start
-                                <= date(r.year, r.month, 1)
-                                <= prior_period.end
-                            ]
-                            if prior_reports:
-                                prior_latest = max(prior_reports, key=lambda r: (r.year, r.month))
-                                prior_ending = prior_latest.total_spent
-                            else:
-                                prior_ending = earliest.total_spent
-                        actual_amt = latest.total_spent - prior_ending
+                actual_amt = cumulative_at(period.end) - cumulative_at(
+                    period.start - timedelta(days=1)
+                )
 
             if (is_current or is_future) and rates and personnel:
                 proj_start = today.replace(day=1) if is_current else period.start
@@ -2136,6 +2235,8 @@ class SmaugAPI:
                 }
             )
 
+        latest_cumulative = reports[-1].total_spent if reports else Decimal("0")
+
         res = {
             "project": project,
             "award_id": contract.award_id,
@@ -2144,7 +2245,18 @@ class SmaugAPI:
             "total_actual": round(float(total_actual), 2),
             "total_projected": round(float(total_projected), 2),
             "total_variance": round(float(total_budget - total_actual - total_projected), 2),
+            "cumulative_spent": round(float(latest_cumulative), 2),
+            "reconciles": abs(total_actual - latest_cumulative) < Decimal("0.01"),
         }
+        if opening_balance > Decimal("0") and opening_start and opening_end:
+            res["opening_balance"] = {
+                "amount": round(float(opening_balance), 2),
+                "covers": f"{opening_start.strftime('%b %Y')} - {opening_end.strftime('%b %Y')}",
+                "note": (
+                    "Spent before the earliest available report and allocated evenly "
+                    "across those months; no monthly detail exists to split it exactly."
+                ),
+            }
         return self._sanitize_result(res)
 
     # ------------------------------------------------------------------
@@ -2375,11 +2487,77 @@ class SmaugAPI:
                             f"Project '{project_id}' has missing invoice gaps: {', '.join(missing_invs)}."
                         )
 
-        # 3. Parse warnings
+        # 3. Funded ceiling vs. spend and commitments
+        from .budget_resolution import resolve_award_end_date, resolve_funded_ceiling
+
+        for project_id in projects:
+            data = store.get_project(project_id)
+            if not data or not data.spending:
+                continue
+            latest = max(data.spending, key=lambda r: (r.year, r.month))
+            ceiling, ceiling_source = resolve_funded_ceiling(store, project_id, self._data_dir)
+            if ceiling > Decimal("0"):
+                committed = latest.total_committed or Decimal("0")
+                exposure = latest.total_spent + committed
+                if exposure > ceiling:
+                    warnings.append(
+                        f"Project '{project_id}' is over its funded ceiling: "
+                        f"${exposure:,.2f} spent and committed as of {latest.period} against "
+                        f"${ceiling:,.2f} ({ceiling_source}), over by ${exposure - ceiling:,.2f}."
+                    )
+                elif latest.total_spent > ceiling:
+                    warnings.append(
+                        f"Project '{project_id}' has spent ${latest.total_spent:,.2f} against a "
+                        f"funded ceiling of ${ceiling:,.2f} ({ceiling_source})."
+                    )
+
+            # 4. Award end date recorded in the manifest vs. the sponsor's report
+            award_end, end_source = resolve_award_end_date(store, project_id)
+            manifest_end = data.project.end_date
+            if (
+                award_end
+                and manifest_end
+                and end_source.startswith("report")
+                and (award_end.year, award_end.month) != (manifest_end.year, manifest_end.month)
+            ):
+                warnings.append(
+                    f"Project '{project_id}' manifest end_date is {manifest_end:%Y-%m} but the "
+                    f"{latest.period} report gives {award_end:%Y-%m-%d}; forecasts use the "
+                    f"reported date. Update manifest.yaml to match."
+                )
+
+        # 5. Reports filed under the wrong directory
+        for report_dir, expected in (
+            (store.reports_dir / "sponsored", "sponsored"),
+            (store.reports_dir / "non-sponsored", "discretionary"),
+        ):
+            if not report_dir.exists():
+                continue
+            known_projects = [store.get_project(pid) for pid in projects]
+            for report_file in sorted(report_dir.glob("*.pdf")):
+                stem = report_file.stem
+                matched = None
+                for pdata in known_projects:
+                    if not pdata:
+                        continue
+                    proj = pdata.project
+                    for ident in (proj.grant_number, proj.funded_program):
+                        if ident and stem.startswith(str(ident)):
+                            matched = proj.project_type.value
+                            break
+                    if matched:
+                        break
+                if matched and matched != expected:
+                    warnings.append(
+                        f"Report '{report_file.name}' is a {matched} report filed under "
+                        f"reports/{report_dir.name}/; move it so it parses with the right parser."
+                    )
+
+        # 6. Parse warnings
         for pw in store.get_parse_warnings():
             warnings.append(f"Parse warning in {pw.file}: {pw.message}")
 
-        # 4. Personnel over-commitments
+        # 7. Personnel over-commitments
         config_path = self._config_path()
         if config_path.exists():
             try:

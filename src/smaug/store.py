@@ -331,7 +331,11 @@ class ProjectStore:
         # 1. Load from project-specific invoice directories
         for short_name, project in self._projects.items():
             if project.budget_dir:
-                invoice_dir = Path(project.budget_dir) / "invoices"
+                # budget_dir is normally relative to the data directory
+                budget_dir = Path(project.budget_dir)
+                if not budget_dir.is_absolute():
+                    budget_dir = self.data_dir / budget_dir
+                invoice_dir = budget_dir / "invoices"
                 if invoice_dir.exists():
                     invoice_files = find_invoices(invoice_dir)
                     for pdf_path in invoice_files:
@@ -565,6 +569,14 @@ class ProjectStore:
         if not data:
             return json.dumps({"error": f"Project not found: {project_id}"})
 
+        # One authoritative budget figure, so the project record and the budget
+        # object cannot disagree (the manifest carries a rounded copy).
+        from .budget_resolution import resolve_project_budget
+
+        authoritative_budget, budget_source = resolve_project_budget(
+            self, project_id, self.data_dir
+        )
+
         # Convert to serializable dict
         result: dict[str, Any] = {
             "project": {
@@ -574,9 +586,10 @@ class ProjectStore:
                 "type": data.project.project_type.value,
                 "grant_number": data.project.grant_number,
                 "award_id": data.project.award_id,
-                "total_budget": str(data.project.total_budget)
-                if data.project.total_budget is not None
+                "total_budget": str(authoritative_budget)
+                if authoritative_budget > Decimal("0")
                 else None,
+                "total_budget_source": budget_source,
             },
             "budget": None,
             "spending": [],
@@ -587,17 +600,21 @@ class ProjectStore:
             result["budget"] = {
                 "total_direct_costs": str(data.budget.total_direct_costs),
                 "total_indirect_costs": str(data.budget.total_indirect_costs),
-                "total_budget": str(data.budget.total_budget),
+                "total_budget": str(
+                    authoritative_budget
+                    if authoritative_budget > Decimal("0")
+                    else data.budget.total_budget
+                ),
                 "lines": [
                     {"category": line.category, "year": line.year, "amount": str(line.amount)}
                     for line in data.budget.lines
                 ],
             }
-        elif data.project.total_budget is not None:
+        elif authoritative_budget > Decimal("0"):
             result["budget"] = {
                 "total_direct_costs": None,
                 "total_indirect_costs": None,
-                "total_budget": str(data.project.total_budget),
+                "total_budget": str(authoritative_budget),
                 "lines": [],
             }
         else:
@@ -615,7 +632,6 @@ class ProjectStore:
             if b_path.exists():
                 contract = load_contractual_budget(b_path)
                 if contract:
-                    result["project"]["total_budget"] = str(contract.total_budget)
                     result["budget"] = {
                         "total_direct_costs": str(contract.total_direct_costs),
                         "total_indirect_costs": str(contract.total_indirect_costs),

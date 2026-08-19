@@ -111,6 +111,13 @@ def main():
         Returns project names, budgets, spending, monthly burn rates,
         and projected remaining funds.
 
+        Two different budget figures are reported and should not be conflated:
+        'budget' is the authorized total across all option years, while
+        'funded_ceiling' is what the sponsor has actually obligated. Spending
+        stops at the ceiling, so 'projected_remaining' and 'pct_spent' are
+        measured against it. 'end_date' comes from the sponsor's latest report
+        where one is available.
+
         Args:
             status: Filter by lifecycle status. Options: 'active' (default),
                     'proposed', 'accepted', 'completed'.
@@ -188,10 +195,18 @@ def main():
         Projects forward spending based on current personnel assignments
         and institutional rates, returning the estimated stop-work month.
 
+        Measured against the funded ceiling -- what the sponsor has obligated --
+        rather than the larger authorized budget, and never projected past the
+        award end date. Also returns outstanding salary commitments and the
+        per-person encumbrances behind them; a project can already be over its
+        ceiling on commitments alone, in which case 'already_over_ceiling' is
+        true regardless of the projected stop month.
+
         Args:
             project: Project short name.
             ceiling: Override the funding ceiling amount. If not provided,
-                     uses the ceiling from the latest report or budget.
+                     uses the funded ceiling from the latest report, falling
+                     back to the authorized budget.
         """
         api = SmaugAPI(data_dir, anonymize=anonymize)
         return json.dumps(api.stopwork_forecast(project, ceiling=ceiling), indent=2)

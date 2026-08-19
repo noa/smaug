@@ -7,6 +7,7 @@ contractual YAML, Excel, manifest, and report sources.
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -90,3 +91,53 @@ def resolve_project_budget(
             return latest.funded_ceiling, "funded_ceiling"
 
     return Decimal("0"), "none"
+
+
+def resolve_funded_ceiling(
+    store: ProjectStore,
+    project_id: str,
+    data_dir: str | Path,
+) -> tuple[Decimal, str]:
+    """Resolve the amount a project may actually spend against.
+
+    The contractual budget is what the award is *authorized* for across all
+    option years; the funded ceiling is what the sponsor has actually obligated
+    so far. Spending is stopped by the ceiling, not by the authorization, so
+    anything forecasting exhaustion must measure against this.
+
+    Returns:
+        tuple[Decimal, str]: (ceiling_amount, source_description)
+    """
+    data = store.get_project(project_id)
+    if data and data.spending:
+        latest = max(data.spending, key=lambda r: (r.year, r.month))
+        if latest.funded_ceiling and latest.funded_ceiling > Decimal("0"):
+            return latest.funded_ceiling, f"funded ceiling ({latest.period} report)"
+
+    amount, source = resolve_project_budget(store, project_id, data_dir)
+    return amount, f"authorized budget ({source})"
+
+
+def resolve_award_end_date(store: ProjectStore, project_id: str) -> tuple[date | None, str]:
+    """Resolve the date a project's award actually ends.
+
+    The sponsor's own reports carry the award end date, so they take priority
+    over the hand-maintained manifest entry, which goes stale on extensions.
+
+    Returns:
+        tuple[date | None, str]: (end_date, source_description)
+    """
+    data = store.get_project(project_id)
+    if not data:
+        return None, "none"
+
+    if data.spending:
+        latest = max(data.spending, key=lambda r: (r.year, r.month))
+        reported = latest.grant_end_date or latest.budget_end_date
+        if reported:
+            return reported, f"report ({latest.period})"
+
+    if data.project.end_date:
+        return data.project.end_date, "manifest"
+
+    return None, "none"

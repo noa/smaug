@@ -184,8 +184,10 @@ def validate_report(
                         severity="warning",
                         code="COMMITMENT_SUM_MISMATCH",
                         message=(
-                            f"Salary commitment detail sum ${comm_sum:,.2f} differs from "
-                            f"salary_committed ${report.salary_committed:,.2f} by ${comm_diff:,.2f}"
+                            f"Salary Commitment Report itemizes ${comm_sum:,.2f} but the summary "
+                            f"page's committed column shows ${report.salary_committed:,.2f} "
+                            f"(${comm_diff:,.2f} unitemized) — per-person commitment detail is "
+                            f"incomplete for this period"
                         ),
                     )
                 )
