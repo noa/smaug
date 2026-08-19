@@ -518,8 +518,8 @@ def parse_sponsored_summary(page) -> dict:
 # ----------------------------------------------------------------------
 
 # Rows look like:
-#   "Andrews, Nicholas SAL-FACULTY FT/PT 03/15/2026 Salary 1,974.75"
-#   "Wiesner, Matthew SAL-FAC TLC 01/15/2026 PtInstSl 365.21"
+#   "Smith, Jane SAL-FACULTY FT/PT 03/15/2026 Salary 1,974.75"
+#   "Roe, Richard SAL-FAC TLC 01/15/2026 PtInstSl 365.21"
 _SALARY_ROW = re.compile(
     r"^(?P<left>.+?)\s+(?P<date>\d{1,2}/\d{1,2}/\d{2,4})\s+(?P<rest>.+?)\s+"
     r"(?P<amount>\(?[\d,]+\.\d{2}\)?)$"
@@ -531,7 +531,7 @@ _GL_TOKEN = re.compile(r"^(?:SAL|SALARY|WAGE|WAGES|GL)[-A-Z0-9]*$")
 
 def _split_name_and_gl(left: str) -> tuple[str, str | None]:
     """
-    Split "Garcia Perera, Leibny Paola SAL-FACULTY FT/PT" into name and G/L label.
+    Split "Doe, Mary Elizabeth SAL-FACULTY FT/PT" into name and G/L label.
 
     Prefers an explicit SAL-/SALARY- token; otherwise peels off the trailing run
     of tokens that contain no lower-case letters.

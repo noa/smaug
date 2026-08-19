@@ -99,7 +99,7 @@ class TestPersonnelNameResolution:
 
     def test_resolver_never_returns_name_outside_candidates(self):
         """Resolver must only return names that exist in the candidate list."""
-        candidates = ["Smith, Jane", "Doe, John", "Rasim"]
+        candidates = ["Smith, Jane", "Doe, John", "Robbie"]
         resolved, err = resolve_personnel_name("Nonexistent", candidates)
         assert resolved is None
         assert err is not None
@@ -298,7 +298,7 @@ class TestUnifiedBudgetResolution:
         with open(budget_cfg, "w") as f:
             yaml.dump(
                 {
-                    "award_id": "B661547",
+                    "award_id": "X100001",
                     "periods": [
                         {
                             "year": 1,
@@ -326,7 +326,7 @@ class TestUnifiedBudgetResolution:
             manifest = yaml.safe_load(f)
         manifest.setdefault("projects", {})["ARTS"] = {
             "name": "ARTS Project",
-            "pi": "Andrews, Nicholas",
+            "pi": "Smith, Jane",
             "status": "active",
         }
         with open(manifest_path, "w") as f:
@@ -336,7 +336,7 @@ class TestUnifiedBudgetResolution:
         api = SmaugAPI(temp_store_api.data_dir)
         res = api.budget_vs_actuals("ARTS")
         assert "error" not in res
-        assert res["award_id"] == "B661547"
+        assert res["award_id"] == "X100001"
         assert res["total_budget"] == 1550000.0
 
         # dump_project should also return populated budget
