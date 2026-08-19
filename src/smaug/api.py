@@ -91,7 +91,7 @@ class SmaugAPI:
         """Re-anonymize any real names that leaked into error messages or return values.
 
         When anonymization is enabled, CLI commands internally de-anonymize names
-        (e.g. "PhD 1" → "Mahapatra, Aurosweta") to operate on the YAML config.
+        (e.g. "PhD 1" → "Doe, John") to operate on the YAML config.
         If an error occurs, the real name can appear in the error message. This
         method scrubs those leaks before the result reaches the MCP layer.
         """
@@ -130,7 +130,7 @@ class SmaugAPI:
         """Suppress stdout during CLI command execution.
 
         CLI write commands use print() for informational messages (e.g.
-        "Resolved 'PhD 1' to: Mahapatra, Aurosweta"). When running under
+        "Resolved 'PhD 1' to: Doe, John"). When running under
         the MCP server (stdio transport), these print() calls would both
         leak real names and corrupt the JSON-RPC protocol stream.
         """

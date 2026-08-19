@@ -227,30 +227,24 @@ class TestNameCanonicalization:
     """One person must not become several identities through spelling variants."""
 
     ALIASES: ClassVar[dict[str, str]] = {
-        "Paola": "Garcia Perera, Leibny",
-        "Garcia Perera, Leibny Paola": "Garcia Perera, Leibny",
+        "Molly": "Doe, Mary",
+        "Doe, Mary Elizabeth": "Doe, Mary",
     }
-    KNOWN: ClassVar[set[str]] = {"Garcia Perera, Leibny", "Andrews, Nicholas"}
+    KNOWN: ClassVar[set[str]] = {"Doe, Mary", "Smith, Jane"}
 
     def test_alias_resolves_to_config_spelling(self):
         assert (
-            canonicalize_person_name("Garcia Perera, Leibny Paola", self.ALIASES, self.KNOWN)
-            == "Garcia Perera, Leibny"
+            canonicalize_person_name("Doe, Mary Elizabeth", self.ALIASES, self.KNOWN) == "Doe, Mary"
         )
 
     def test_short_alias_resolves(self):
-        assert (
-            canonicalize_person_name("Paola", self.ALIASES, self.KNOWN) == "Garcia Perera, Leibny"
-        )
+        assert canonicalize_person_name("Molly", self.ALIASES, self.KNOWN) == "Doe, Mary"
 
     def test_reversed_name_order_resolves(self):
-        assert canonicalize_person_name("Nicholas Andrews", {}, self.KNOWN) == "Andrews, Nicholas"
+        assert canonicalize_person_name("Jane Smith", {}, self.KNOWN) == "Smith, Jane"
 
     def test_longer_payroll_spelling_resolves_without_an_alias(self):
-        assert (
-            canonicalize_person_name("Garcia Perera, Leibny Paola", {}, self.KNOWN)
-            == "Garcia Perera, Leibny"
-        )
+        assert canonicalize_person_name("Doe, Mary Elizabeth", {}, self.KNOWN) == "Doe, Mary"
 
     def test_unknown_name_is_left_alone(self):
         assert canonicalize_person_name("Stranger, Perfect", {}, self.KNOWN) == "Stranger, Perfect"

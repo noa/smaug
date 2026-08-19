@@ -85,8 +85,8 @@ def _mock_page(text: str) -> MagicMock:
 # The regex captures 3 groups: (monthly, cum_spent, committed).
 SYNTHETIC_SUMMARY_TEXT = """\
 Statement of Expenditures
-Grant: 145891 - IARPA ARTS PI For Andrews, Nicholas
-Sponsored Program: 90109289 - B661547
+Grant: 200001 - Quantum Sensing PI For Smith, Jane
+Sponsored Program: 90200001 - X100001
 
 Expenditures Budget March 2026
 
@@ -117,16 +117,16 @@ class TestParseSponsoredSummary:
         return parse_sponsored_summary(page)
 
     def test_grant_number(self, summary):
-        assert summary["grant_number"] == "145891"
+        assert summary["grant_number"] == "200001"
 
     def test_grant_name(self, summary):
-        assert "IARPA ARTS" in summary["grant_name"]
+        assert "Quantum Sensing" in summary["grant_name"]
 
     def test_sponsored_program(self, summary):
-        assert summary["sponsored_program"] == "90109289"
+        assert summary["sponsored_program"] == "90200001"
 
     def test_award_id(self, summary):
-        assert summary["award_id"] == "B661547"
+        assert summary["award_id"] == "X100001"
 
     def test_period(self, summary):
         assert summary["period"] == "March 2026"
@@ -180,13 +180,13 @@ class TestParseSponsoredSummaryMissingFields:
 # Synthetic personnel / salary report page
 SYNTHETIC_PERSONNEL_TEXT = """\
 Salary Report
-Grant: 145891 - IARPA ARTS
+Grant: 200001 - Quantum Sensing
 
 March 2026
 
 FACULTY Salaries
-Andrews, Nicholas Doc 1234567 01/2026 02/2026 3,500.00
-Total for Andrews, Nicholas 3,500.00
+Smith, Jane Doc 1234567 01/2026 02/2026 3,500.00
+Total for Smith, Jane 3,500.00
 
 STUDENT GRAD Wages
 Li, Henry Doc 2345678 01/2026 02/2026 4,166.67
@@ -208,13 +208,13 @@ class TestParsePersonnelPage:
 
     def test_finds_all_people(self, personnel):
         names = {p.person_name for p in personnel}
-        assert "Andrews, Nicholas" in names
+        assert "Smith, Jane" in names
         assert "Li, Henry" in names
         assert "Zhang, Lin" in names
 
     def test_salary_amounts(self, personnel):
         by_name = {p.person_name: p for p in personnel}
-        assert by_name["Andrews, Nicholas"].salary_amount == Decimal("3500.00")
+        assert by_name["Smith, Jane"].salary_amount == Decimal("3500.00")
         assert by_name["Li, Henry"].salary_amount == Decimal("4166.67")
         assert by_name["Zhang, Lin"].salary_amount == Decimal("6666.66")
 
@@ -224,7 +224,7 @@ class TestParsePersonnelPage:
 
     def test_project_id(self, personnel):
         for p in personnel:
-            assert p.project_id == "145891"
+            assert p.project_id == "200001"
 
     def test_non_salary_page_returns_empty(self):
         page = _mock_page("This is a regular page with no salary data.")
@@ -322,10 +322,10 @@ def _cells(label_words, **values):
 REAL_LAYOUT_SUMMARY_TEXT = """\
 Sponsored PI Summary Report Direct Cost Balance: (68,611.59)
 July 2026 Over Committed: (106,691.02)
-Sponsored Program: 90109289 - B661547 Grant: 145891 - IARPA ARTS Project
-PI For Sponsored Program: Doe, Jane (114605) Grantor Code: Example National Laboratory \
+Sponsored Program: 90200001 - X100001 Grant: 200001 - Quantum Sensing Project
+PI For Sponsored Program: Doe, Jane (100001) Grantor Code: Example National Laboratory \
 Budget Begin Date: 02/06/2024
-Responsible Cost Center: 2110000000 - CTR Award ID: B661547 Budget End Date: 03/31/2027
+Responsible Cost Center: 1000000000 - CTR Award ID: X100001 Budget End Date: 03/31/2027
 Program FA Function: ORGANIZED RESEARCH Grant Project End Date: 03/31/2027
 F&A Rate: 55.50 Payment Method: MONL Grant Status: Approved Award
 Revenue Budget July 2026 Total Received Total Expected Total Rcvd. & Expected Budget Balance
@@ -437,7 +437,7 @@ class TestPositionalSummaryParsing:
 REAL_LAYOUT_PERSONNEL_PAGE = """\
 Sponsored PI Salary Report
 July 2026
-Sponsored Program: 90109289 - B661547 Grant: 145891 - IARPA ARTS Project
+Sponsored Program: 90200001 - X100001 Grant: 200001 - Quantum Sensing Project
 Employee G/L Account End of Pay Period Wage Type Pay Period Salary
 Doe, Jane SAL-FACULTY FT/PT 03/15/2026 Salary 1,974.75
 Doe, Jane SAL-FACULTY FT/PT 07/31/2026 Salary 937.50
@@ -455,7 +455,7 @@ class TestRealLayoutPersonnelPage:
     @pytest.fixture
     def personnel(self):
         page = _mock_page(REAL_LAYOUT_PERSONNEL_PAGE)
-        return parse_personnel_page(page, report_period="July 2026", report_project_id="145891")
+        return parse_personnel_page(page, report_period="July 2026", report_project_id="200001")
 
     def test_all_people_found(self, personnel):
         assert {p.person_name for p in personnel} == {
@@ -497,7 +497,7 @@ class TestRealLayoutPersonnelPage:
 REAL_LAYOUT_COMMITMENT_PAGE = """\
 Sponsored PI Salary Commitment Report
 July 2026
-Sponsored Program: 90109289 - B661547 Grant: 145891 - IARPA ARTS Project
+Sponsored Program: 90200001 - X100001 Grant: 200001 - Quantum Sensing Project
 Employee Commitment Start Commitment End Commitment
 G/L Account
 Doe, Jane SALARY-FACULTY FT/PT August-2026 December-2026 9,375.00
@@ -512,7 +512,7 @@ class TestRealLayoutCommitmentPage:
     @pytest.fixture
     def commitments(self):
         page = _mock_page(REAL_LAYOUT_COMMITMENT_PAGE)
-        return parse_commitment_page(page, report_period="July 2026", report_project_id="145891")
+        return parse_commitment_page(page, report_period="July 2026", report_project_id="200001")
 
     def test_all_commitments_found(self, commitments):
         assert {c.person_name for c in commitments} == {"Doe, Jane", "Poe, Edgar", "Moe, Larry"}

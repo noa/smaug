@@ -157,9 +157,9 @@ def canonicalize_person_name(
     Reduce a name to the single spelling used to identify a person.
 
     Payroll reports, the personnel config, and hand-written notes all spell the
-    same person differently ("Garcia Perera, Leibny Paola" vs "Garcia Perera,
-    Leibny"; "Nicholas Andrews" vs "Andrews, Nicholas"). Without this, each
-    spelling becomes a separate person downstream.
+    same person differently ("Doe, Mary Elizabeth" vs "Doe, Mary"; "Jane Smith"
+    vs "Smith, Jane"). Without this, each spelling becomes a separate person
+    downstream.
     """
     if not name:
         return name

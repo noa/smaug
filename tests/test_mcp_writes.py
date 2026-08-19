@@ -244,7 +244,7 @@ class TestAnonymizationPrivacy:
     """Bug: error messages leaked real names when anonymization was enabled.
 
     When an MCP agent called set_assignment_end("PhD 1", "ARTS", "2026-06"),
-    the error message returned "Person 'Mahapatra, Aurosweta' not found in config"
+    the error message returned "Person 'Doe, John' not found in config"
     — exposing the real identity behind the anonymized label.
     """
 
