@@ -123,6 +123,19 @@ class Expense:
 
 
 @dataclass
+class CommitmentDetail:
+    """Per-person commitment from the Salary Commitment Report."""
+
+    person_name: str
+    employee_type: EmployeeType = EmployeeType.UNKNOWN
+    salary_committed: Decimal = Decimal("0")
+    fringe_committed: Decimal = Decimal("0")
+    idc_committed: Decimal = Decimal("0")
+    encumbrance_start: Date | None = None
+    encumbrance_end: Date | None = None
+
+
+@dataclass
 class SpendingReport:
     """Monthly spending report for a project."""
 
@@ -137,6 +150,7 @@ class SpendingReport:
     total_spent_and_committed: Decimal = Decimal("0")
     indirect_spent: Decimal = Decimal("0")
     budget_utilized_pct: Decimal | None = None
+    total_month: Decimal | None = None
 
     # Category breakdowns (cumulative "Total Spent" per category)
     salary_spent: Decimal = Decimal("0")
@@ -144,7 +158,12 @@ class SpendingReport:
     tuition_spent: Decimal = Decimal("0")
     insurance_spent: Decimal = Decimal("0")
     service_center_spent: Decimal = Decimal("0")  # Cloud compute / HPC
-    travel_spent: Decimal = Decimal("0")
+    travel_spent: Decimal = Decimal("0")  # Travel Domestic
+    travel_foreign_spent: Decimal = Decimal("0")
+    supplies_spent: Decimal = Decimal("0")  # Supplies & Materials
+    equipment_spent: Decimal = Decimal("0")  # Capital Equipment
+    subcontracts_spent: Decimal = Decimal("0")
+    consultant_spent: Decimal = Decimal("0")
     other_spent: Decimal = Decimal("0")
 
     # Monthly (single-month) category amounts from report
@@ -154,17 +173,42 @@ class SpendingReport:
     insurance_month: Decimal | None = None
     service_center_month: Decimal | None = None
     travel_month: Decimal | None = None
+    travel_foreign_month: Decimal | None = None
+    supplies_month: Decimal | None = None
+    equipment_month: Decimal | None = None
+    subcontracts_month: Decimal | None = None
+    consultant_month: Decimal | None = None
     other_month: Decimal | None = None
     indirect_month: Decimal | None = None
 
     # Category commitments
     salary_committed: Decimal = Decimal("0")
     fringe_committed: Decimal = Decimal("0")
+    tuition_committed: Decimal = Decimal("0")
+    insurance_committed: Decimal = Decimal("0")
+    service_center_committed: Decimal = Decimal("0")
+    travel_committed: Decimal = Decimal("0")
+    travel_foreign_committed: Decimal = Decimal("0")
+    supplies_committed: Decimal = Decimal("0")
+    equipment_committed: Decimal = Decimal("0")
+    subcontracts_committed: Decimal = Decimal("0")
+    consultant_committed: Decimal = Decimal("0")
+    other_committed: Decimal = Decimal("0")
 
-    # Funded ceiling from report (Sponsored Revenue received)
+    # Funded ceiling and revenue from report
     funded_ceiling: Decimal | None = None
+    total_revenue_received: Decimal | None = None
+    revenue_month: Decimal | None = None
 
-    # Detailed transactions
+    # Award metadata
+    budget_start_date: Date | None = None
+    budget_end_date: Date | None = None
+    grant_end_date: Date | None = None
+    grantor_code: str | None = None
+    stated_idc_rate: Decimal | None = None
+
+    # Detailed commitments & transactions
+    commitment_details: list[CommitmentDetail] = field(default_factory=list)
     expenses: list[Expense] = field(default_factory=list)
 
 
@@ -186,6 +230,12 @@ class EffortAllocation:
     salary_amount: Decimal
     employee_type: EmployeeType = EmployeeType.UNKNOWN
     effort_pct: Decimal | None = None  # Derived from salary if base known
+
+    # Detail fields from payroll ledger
+    gl_account: str | None = None
+    wage_type: str | None = None
+    pay_period_start: Date | None = None
+    pay_period_end: Date | None = None
 
 
 @dataclass
@@ -338,6 +388,49 @@ def decimal_decoder(dct: dict) -> dict:
         "total_budget",
         "effort_pct",
         "total_effort_pct",
+        "total_month",
+        "salary_spent",
+        "fringe_spent",
+        "tuition_spent",
+        "insurance_spent",
+        "service_center_spent",
+        "travel_spent",
+        "travel_foreign_spent",
+        "supplies_spent",
+        "equipment_spent",
+        "subcontracts_spent",
+        "consultant_spent",
+        "other_spent",
+        "salary_month",
+        "fringe_month",
+        "tuition_month",
+        "insurance_month",
+        "service_center_month",
+        "travel_month",
+        "travel_foreign_month",
+        "supplies_month",
+        "equipment_month",
+        "subcontracts_month",
+        "consultant_month",
+        "other_month",
+        "indirect_month",
+        "salary_committed",
+        "fringe_committed",
+        "idc_committed",
+        "tuition_committed",
+        "insurance_committed",
+        "service_center_committed",
+        "travel_committed",
+        "travel_foreign_committed",
+        "supplies_committed",
+        "equipment_committed",
+        "subcontracts_committed",
+        "consultant_committed",
+        "other_committed",
+        "funded_ceiling",
+        "total_revenue_received",
+        "revenue_month",
+        "stated_idc_rate",
     ]:
         if key in dct and dct[key] is not None:
             dct[key] = Decimal(dct[key])

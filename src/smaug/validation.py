@@ -147,6 +147,11 @@ def validate_report(
         + report.insurance_spent
         + report.service_center_spent
         + report.travel_spent
+        + report.travel_foreign_spent
+        + report.supplies_spent
+        + report.equipment_spent
+        + report.subcontracts_spent
+        + report.consultant_spent
         + report.other_spent
         + report.indirect_spent
     )
@@ -166,6 +171,26 @@ def validate_report(
                     ),
                 )
             )
+
+    # Commitment details vs salary_committed check
+    if report.commitment_details and report.salary_committed > Decimal("0"):
+        comm_sum = sum((c.salary_committed for c in report.commitment_details), Decimal("0"))
+        if comm_sum > Decimal("0"):
+            comm_diff = abs(report.salary_committed - comm_sum)
+            if comm_diff > Decimal("100") and comm_diff > report.salary_committed * Decimal("0.05"):
+                result.warnings.append(
+                    ParseWarning(
+                        file=fname,
+                        severity="warning",
+                        code="COMMITMENT_SUM_MISMATCH",
+                        message=(
+                            f"Salary Commitment Report itemizes ${comm_sum:,.2f} but the summary "
+                            f"page's committed column shows ${report.salary_committed:,.2f} "
+                            f"(${comm_diff:,.2f} unitemized) — per-person commitment detail is "
+                            f"incomplete for this period"
+                        ),
+                    )
+                )
 
     # All-zeros check: if total_spent is 0 but the file parsed successfully,
     # something is likely wrong with the extraction

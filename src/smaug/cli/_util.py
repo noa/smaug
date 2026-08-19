@@ -150,11 +150,88 @@ def get_role_display(person_type_or_enum) -> str:
         return "Person"
 
 
+def canonicalize_person_name(
+    name: str, aliases: dict[str, str] | None, known: set[str] | None = None
+) -> str:
+    """
+    Reduce a name to the single spelling used to identify a person.
+
+    Payroll reports, the personnel config, and hand-written notes all spell the
+    same person differently ("Garcia Perera, Leibny Paola" vs "Garcia Perera,
+    Leibny"; "Nicholas Andrews" vs "Andrews, Nicholas"). Without this, each
+    spelling becomes a separate person downstream.
+    """
+    if not name:
+        return name
+    candidate = name.strip()
+
+    # 1. Explicit alias, case-insensitive
+    if aliases:
+        lowered = candidate.lower()
+        for alias, real_name in aliases.items():
+            if alias.lower() == lowered:
+                candidate = real_name
+                break
+
+    if not known:
+        return candidate
+
+    # 2. Exact match against a known spelling
+    if candidate in known:
+        return candidate
+    for k in known:
+        if k.lower() == candidate.lower():
+            return k
+
+    # 3. "First Last" written where "Last, First" is the known spelling
+    if "," not in candidate:
+        parts = candidate.split()
+        if len(parts) >= 2:
+            flipped = f"{parts[-1]}, {' '.join(parts[:-1])}"
+            for k in known:
+                if k.lower() == flipped.lower():
+                    return k
+
+    # 4. A longer spelling that extends a known one ("Lastname, First Middle")
+    matches = [
+        k
+        for k in known
+        if candidate.lower().startswith(k.lower() + " ") or candidate.lower() == k.lower()
+    ]
+    if len(matches) == 1:
+        return matches[0]
+
+    return candidate
+
+
 class Anonymizer:
     enabled = False
     data_dir = None
     _real_to_anon: ClassVar[dict[str, str]] = {}
     _anon_to_real: ClassVar[dict[str, str]] = {}
+    _aliases: ClassVar[dict[str, str]] = {}
+    _known_names: ClassVar[set[str]] = set()
+
+    @classmethod
+    def canonical(cls, name: str) -> str:
+        """Canonical spelling for ``name`` under the loaded aliases."""
+        return canonicalize_person_name(name, cls._aliases, cls._known_names)
+
+    @classmethod
+    def scrub_map(cls) -> dict[str, str]:
+        """Every real spelling that must be replaced, mapped to its identifier.
+
+        The identifier table is keyed by canonical spelling only, so alias
+        spellings are added here; otherwise a payroll spelling of an already
+        mapped person would pass through unscrubbed.
+        """
+        mapping = dict(cls._real_to_anon)
+        for alias, real_name in cls._aliases.items():
+            canonical = cls.canonical(real_name)
+            if canonical in cls._real_to_anon:
+                mapping.setdefault(alias, cls._real_to_anon[canonical])
+                mapping.setdefault(real_name, cls._real_to_anon[canonical])
+        return mapping
 
     @classmethod
     def save_mapping(cls):
@@ -190,6 +267,8 @@ class Anonymizer:
         cls._real_to_anon = {}
         cls._anon_to_real = {}
 
+        cls._aliases = load_aliases(store.data_dir)
+
         # Load existing mapping file if it exists
         mapping_path = Path(cls.data_dir) / ".anonymizer_mapping.yaml"
         existing_mapping: dict[str, str] = {}
@@ -202,15 +281,8 @@ class Anonymizer:
             except Exception:
                 pass
 
-        cls._real_to_anon = dict(existing_mapping)
-        cls._anon_to_real = {v: k for k, v in existing_mapping.items()}
-
         # Collect all unique personnel names
         all_names = set()
-
-        # Collect from tracker
-        tracker = store.get_personnel_tracker()
-        all_names.update(tracker.get_all_personnel())
 
         # Collect from personnel_config.yaml if it exists
         config_path = Path(store.data_dir) / "projects" / "personnel_config.yaml"
@@ -226,6 +298,24 @@ class Anonymizer:
                     personnel_types[p.name] = p.person_type
             except Exception:
                 pass
+
+        # The personnel config is the canonical spelling of every tracked
+        # person; payroll spellings resolve onto it rather than beside it.
+        cls._known_names = set(all_names)
+
+        tracker = store.get_personnel_tracker()
+        all_names.update(cls.canonical(n) for n in tracker.get_all_personnel())
+
+        # Drop stale entries that name someone already mapped under their
+        # canonical spelling, so one person keeps one identifier.
+        cls._real_to_anon = {}
+        for real_name, anon_name in existing_mapping.items():
+            canonical = cls.canonical(real_name)
+            if canonical != real_name and canonical in existing_mapping:
+                continue
+            cls._real_to_anon.setdefault(canonical, anon_name)
+        pruned = cls._real_to_anon != existing_mapping
+        cls._anon_to_real = {v: k for k, v in cls._real_to_anon.items()}
 
         # Also check tracker allocations to see if we can get types from there
         for name in all_names:
@@ -260,7 +350,7 @@ class Anonymizer:
             cls._real_to_anon[name] = anon_name
             cls._anon_to_real[anon_name] = name
 
-        if new_names:
+        if new_names or pruned:
             cls.save_mapping()
 
     @classmethod
@@ -269,6 +359,7 @@ class Anonymizer:
             return name
         if name.startswith("[") or "hypothetical" in name.lower():
             return name
+        name = cls.canonical(name)
         if name in cls._real_to_anon:
             return cls._real_to_anon[name]
 
@@ -323,15 +414,20 @@ def resolve_personnel_name(
         - On error: (None, error_message)
         - On allow_missing with no match: (original_input, None)
     """
-    # If anonymization is active, perform bidirectional resolution
-    if Anonymizer.enabled:
-        cleaned_query = name_or_idx.lower().replace(" ", "")
-        for anon_name, real_name in Anonymizer._anon_to_real.items():
-            if anon_name.lower().replace(" ", "") == cleaned_query:
-                name_or_idx = real_name
-                break
+    if not name_or_idx:
+        return None, "Empty personnel name provided"
 
-    # Check if it's a number (index)
+    # 1. Exact match against personnel list (case-sensitive)
+    if name_or_idx in personnel_list:
+        return name_or_idx, None
+
+    # 2. Exact match against personnel list (case-insensitive)
+    query_lower = name_or_idx.lower()
+    exact_ci = [p for p in personnel_list if p.lower() == query_lower]
+    if len(exact_ci) == 1:
+        return exact_ci[0], None
+
+    # 3. Check if it's a number (1-based index)
     if name_or_idx.isdigit():
         idx = int(name_or_idx)
         if 1 <= idx <= len(personnel_list):
@@ -339,24 +435,42 @@ def resolve_personnel_name(
         else:
             return None, f"Index {idx} out of range (1-{len(personnel_list)})"
 
-    # Check aliases (case-insensitive)
+    # 4. Check aliases (case-insensitive)
+    resolved_query = name_or_idx
     if aliases:
-        query_lower = name_or_idx.lower()
         for alias, real_name in aliases.items():
             if alias.lower() == query_lower:
-                # Verify the real name exists
                 if real_name in personnel_list:
                     return real_name, None
-                # Alias points to unknown person, try fuzzy on real_name
+                exact_alias_ci = [p for p in personnel_list if p.lower() == real_name.lower()]
+                if len(exact_alias_ci) == 1:
+                    return exact_alias_ci[0], None
+                resolved_query = real_name
                 break
 
-    # Try exact match first
-    if name_or_idx in personnel_list:
-        return name_or_idx, None
+    # 5. Check anonymization mapping if active
+    if Anonymizer.enabled:
+        cleaned_query = name_or_idx.lower().replace(" ", "")
+        for anon_name, real_name in Anonymizer._anon_to_real.items():
+            if anon_name.lower().replace(" ", "") == cleaned_query:
+                if real_name in personnel_list:
+                    return real_name, None
+                exact_anon_ci = [p for p in personnel_list if p.lower() == real_name.lower()]
+                if len(exact_anon_ci) == 1:
+                    return exact_anon_ci[0], None
+                resolved_query = real_name
+                break
 
-    # Fuzzy match: case-insensitive substring search
-    query = name_or_idx.lower()
-    matches = [p for p in personnel_list if query in p.lower()]
+    # 6. Check exact match with resolved_query
+    if resolved_query in personnel_list:
+        return resolved_query, None
+    exact_res_ci = [p for p in personnel_list if p.lower() == resolved_query.lower()]
+    if len(exact_res_ci) == 1:
+        return exact_res_ci[0], None
+
+    # 7. Fuzzy match: case-insensitive substring search strictly in personnel_list
+    fuzzy_query = resolved_query.lower()
+    matches = [p for p in personnel_list if fuzzy_query in p.lower()]
 
     if len(matches) == 1:
         return matches[0], None
@@ -364,7 +478,7 @@ def resolve_personnel_name(
         match_list = "\n".join(f"  - {m}" for m in matches)
         return None, f"Multiple personnel matching '{name_or_idx}':\n{match_list}"
 
-    # No matches
+    # 8. No matches
     if allow_missing:
         return name_or_idx, None
     return None, f"No personnel found matching '{name_or_idx}'"

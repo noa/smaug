@@ -8,6 +8,34 @@ from ..yaml_utils import git_commit_change, yaml_transaction
 from ._util import load_aliases, parse_date_input, resolve_personnel_name, save_aliases
 
 
+def _get_write_personnel_names(store: ProjectStore, config_path: Path) -> list[str]:
+    """Get personnel names prioritizing personnel_config.yaml, with tracker names as secondary."""
+    names: list[str] = []
+    seen: set[str] = set()
+    if config_path.exists():
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                import yaml
+
+                data = yaml.safe_load(f) or {}
+                for p in data.get("personnel", []):
+                    name = p.get("name")
+                    if name and name not in seen:
+                        names.append(name)
+                        seen.add(name)
+        except Exception:
+            pass
+    try:
+        tracker = store.get_personnel_tracker()
+        for name in tracker.get_all_personnel():
+            if name not in seen:
+                names.append(name)
+                seen.add(name)
+    except Exception:
+        pass
+    return names
+
+
 def cmd_set_end(store: ProjectStore, args) -> None:
     """Set or clear end date for a person's project assignment."""
     # Check if clearing the end date
@@ -16,14 +44,16 @@ def cmd_set_end(store: ProjectStore, args) -> None:
         # Parse the date input
         args.date = parse_date_input(args.date)
 
+    start_filter = None
+    if getattr(args, "start", None):
+        start_filter = parse_date_input(args.start)
+
     config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
 
     if not config_path.exists():
         raise ValueError(f"Personnel config not found: {config_path}")
 
-    # Resolve name - could be an index number or actual name
-    tracker = store.get_personnel_tracker()
-    personnel = tracker.get_all_personnel()
+    personnel = _get_write_personnel_names(store, config_path)
     aliases = load_aliases(args.data_dir)
     target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
@@ -37,34 +67,84 @@ def cmd_set_end(store: ProjectStore, args) -> None:
     try:
         with yaml_transaction(config_path) as config:
             # Find the person and project
-            found = False
+            found_person = False
             for person in config.get("personnel", []):
                 if person["name"] == target_name:
-                    for assignment in person.get("assignments", []):
-                        if assignment["project"] == args.project:
-                            if clear_end:
-                                if "end" in assignment:
-                                    del assignment["end"]
-                                    print(f"Cleared end date: {target_name} on {args.project}")
-                                else:
-                                    print(
-                                        f"{target_name} on {args.project} already has no end date"
-                                    )
+                    found_person = True
+                    matching_assignments = [
+                        a for a in person.get("assignments", []) if a.get("project") == args.project
+                    ]
+
+                    if start_filter:
+                        # Specific segment requested by start date
+                        target_assignments = [
+                            a for a in matching_assignments if a.get("start") == start_filter
+                        ]
+                        if not target_assignments:
+                            available_starts = [
+                                a.get("start") for a in matching_assignments if "start" in a
+                            ]
+                            starts_str = (
+                                ", ".join(f"'{s}'" for s in available_starts)
+                                if available_starts
+                                else "none"
+                            )
+                            raise ValueError(
+                                f"No assignment segment found for {target_name} on {args.project} with start '{start_filter}' (available starts: {starts_str})"
+                            )
+                        target_assignment = target_assignments[0]
+                    else:
+                        # No start filter provided
+                        if len(matching_assignments) > 1:
+                            available_starts = [
+                                a.get("start") or "no-start" for a in matching_assignments
+                            ]
+                            starts_str = ", ".join(f"'{s}'" for s in available_starts)
+                            raise ValueError(
+                                f"Multiple assignment segments found for {target_name} on {args.project} (starts: {starts_str}). Please specify 'start' (start_date) to disambiguate which segment to modify."
+                            )
+                        elif len(matching_assignments) == 1:
+                            target_assignment = matching_assignments[0]
+                        else:
+                            target_assignment = None
+
+                    if target_assignment is not None:
+                        if clear_end:
+                            if "end" in target_assignment:
+                                del target_assignment["end"]
+                                print(f"Cleared end date: {target_name} on {args.project}")
                             else:
-                                assignment["end"] = args.date
-                                print(f"Updated: {target_name} on {args.project} ends {args.date}")
-                            found = True
-                            break
-                    if not found:
+                                print(f"{target_name} on {args.project} already has no end date")
+                        else:
+                            target_assignment["end"] = args.date
+                            start_desc = (
+                                f" starting {target_assignment['start']}"
+                                if "start" in target_assignment
+                                else ""
+                            )
+                            print(
+                                f"Updated: {target_name} on {args.project}{start_desc} ends {args.date}"
+                            )
+                    else:
+                        if clear_end:
+                            raise ValueError(
+                                f"No assignment found to clear end date for {target_name} on {args.project}"
+                            )
                         # Add new assignment
-                        person.setdefault("assignments", []).append(
-                            {"project": args.project, "effort": 1.0, "end": args.date}
-                        )
-                        found = True
+                        new_assign = {"project": args.project, "effort": 1.0, "end": args.date}
+                        if start_filter:
+                            new_assign["start"] = start_filter
+                        person.setdefault("assignments", []).append(new_assign)
                         print(f"Added: {target_name} on {args.project} ends {args.date}")
+
+                    args._resulting_assignments = [
+                        dict(a)
+                        for a in person.get("assignments", [])
+                        if a.get("project") == args.project
+                    ]
                     break
 
-            if not found:
+            if not found_person:
                 raise ValueError(f"Person '{target_name}' not found in config")
     except ValueError:
         raise
@@ -83,9 +163,7 @@ def cmd_set_departure(store: ProjectStore, args) -> None:
     if not config_path.exists():
         raise ValueError(f"Personnel config not found: {config_path}")
 
-    # Resolve name - could be an index number or actual name
-    tracker = store.get_personnel_tracker()
-    personnel = tracker.get_all_personnel()
+    personnel = _get_write_personnel_names(store, config_path)
     aliases = load_aliases(args.data_dir)
     target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
@@ -135,26 +213,12 @@ def cmd_set_salary(store: ProjectStore, args) -> None:
 
     try:
         with yaml_transaction(config_path) as config:
-            # Resolve name - could be an index number or actual name
-            tracker = store.get_personnel_tracker()
-            personnel = tracker.get_all_personnel()
+            personnel = _get_write_personnel_names(store, config_path)
             aliases = load_aliases(args.data_dir)
             target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
             if error:
-                # Fallback: search YAML config directly (for newly added people not in reports)
-                config_names = [p["name"] for p in config.get("personnel", [])]
-                matches = [n for n in config_names if args.name.lower() in n.lower()]
-                if len(matches) == 1:
-                    target_name = matches[0]
-                    error = None
-                    if target_name != args.name:
-                        print(f"Resolved '{args.name}' to: {target_name}")
-                elif len(matches) > 1:
-                    match_list = "\n".join(f"  - {m}" for m in matches)
-                    raise ValueError(f"Multiple personnel matching '{args.name}':\n{match_list}")
-                else:
-                    raise ValueError(error)
+                raise ValueError(error)
 
             if target_name != args.name:
                 print(f"Resolved '{args.name}' to: {target_name}")
@@ -241,9 +305,7 @@ def cmd_set_effort(store: ProjectStore, args) -> None:
     if getattr(args, "end", None):
         args.end = parse_date_input(args.end)
 
-    # Resolve name - could be an index number or actual name
-    tracker = store.get_personnel_tracker()
-    personnel = tracker.get_all_personnel()
+    personnel = _get_write_personnel_names(store, config_path)
     aliases = load_aliases(args.data_dir)
     target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
@@ -345,9 +407,7 @@ def cmd_remove_effort(store: ProjectStore, args) -> None:
     if getattr(args, "end", None):
         args.end = parse_date_input(args.end)
 
-    # Resolve name - could be an index number or actual name
-    tracker = store.get_personnel_tracker()
-    personnel = tracker.get_all_personnel()
+    personnel = _get_write_personnel_names(store, config_path)
     aliases = load_aliases(args.data_dir)
     target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
@@ -714,14 +774,15 @@ def cmd_set_status(store: ProjectStore, args) -> None:
 
 def cmd_set_project_end(store: ProjectStore, args) -> None:
     """Set end date for a project."""
+    from datetime import date
+
     # Parse the date input
     args.date = parse_date_input(args.date)
 
     manifest_path = Path(args.data_dir) / "projects" / "manifest.yaml"
 
     if not manifest_path.exists():
-        print(f"Error: Manifest not found: {manifest_path}")
-        return
+        raise ValueError(f"Manifest not found: {manifest_path}")
 
     try:
         with yaml_transaction(manifest_path) as manifest:
@@ -736,12 +797,89 @@ def cmd_set_project_end(store: ProjectStore, args) -> None:
 
             if not found:
                 raise ValueError(f"Project '{args.project}' not found")
-    except ValueError as e:
-        print(f"Error: {e}")
-        return
+    except ValueError:
+        raise
 
     print(f"Manifest saved to {manifest_path}")
     git_commit_change(args.data_dir, f"set-project-end: {args.project} -> {args.date}")
+
+    # Validation checks
+    warnings: list[str] = []
+    parts = args.date.split("-")
+    new_end_date = date(int(parts[0]), int(parts[1]), 1)
+
+    # 1. Contractual budget periods
+    try:
+        from ..contractual_budget import load_contractual_budget
+
+        budget_path = Path(args.data_dir) / "projects" / args.project / "budget_config.yaml"
+        if budget_path.exists():
+            contract = load_contractual_budget(budget_path)
+            if contract and contract.periods:
+                for period in contract.periods:
+                    p_end = date(period.end.year, period.end.month, 1)
+                    if p_end > new_end_date:
+                        warnings.append(
+                            f"Project end date ({args.date}) precedes budget period Year {period.year_num} end date ({period.end.strftime('%Y-%m-%d')})."
+                        )
+    except Exception:
+        pass
+
+    # 2. Expenses / Purchases
+    try:
+        store.load_purchases_config()
+        for e in store.get_project_expenses(args.project):
+            if e.end_date:
+                e_end = date(e.end_date.year, e.end_date.month, 1)
+                if e_end > new_end_date:
+                    warnings.append(
+                        f"Expense item '{e.description}' runs through {e.end_date.strftime('%Y-%m-%d')}, after project end date ({args.date})."
+                    )
+            elif e.date:
+                e_date = date(e.date.year, e.date.month, 1)
+                if e_date > new_end_date:
+                    warnings.append(
+                        f"Expense item '{e.description}' scheduled for {e.date.strftime('%Y-%m-%d')}, after project end date ({args.date})."
+                    )
+    except Exception:
+        pass
+
+    # 3. Travel items
+    try:
+        store.load_travel_config()
+        for t in store.get_project_travel(args.project):
+            if t.date:
+                t_date = date(t.date.year, t.date.month, 1)
+                if t_date > new_end_date:
+                    traveler_info = f" ({t.traveler})" if t.traveler else ""
+                    warnings.append(
+                        f"Travel item '{t.description}'{traveler_info} scheduled for {t.date.strftime('%Y-%m-%d')}, after project end date ({args.date})."
+                    )
+    except Exception:
+        pass
+
+    # 4. Personnel assignments
+    try:
+        config_path = Path(args.data_dir) / "projects" / "personnel_config.yaml"
+        if config_path.exists():
+            from ..projections import load_personnel_config
+
+            _, config_personnel = load_personnel_config(config_path)
+            for p in config_personnel:
+                for a in p.assignments:
+                    if a.project == args.project and a.end:
+                        a_end = date(a.end.year, a.end.month, 1)
+                        if a_end > new_end_date:
+                            warnings.append(
+                                f"Personnel '{p.name}' assignment on {args.project} ends {a.end.strftime('%Y-%m')}, after project end date ({args.date})."
+                            )
+    except Exception:
+        pass
+
+    for w in warnings:
+        print(f"Warning: {w}")
+
+    args._warnings = warnings
 
 
 def cmd_set_budget(store: ProjectStore, args) -> None:
@@ -958,26 +1096,12 @@ def cmd_set_type(store: ProjectStore, args) -> None:
 
     try:
         with yaml_transaction(config_path) as config:
-            # Resolve name - could be an index number or actual name
-            tracker = store.get_personnel_tracker()
-            personnel = tracker.get_all_personnel()
+            personnel = _get_write_personnel_names(store, config_path)
             aliases = load_aliases(args.data_dir)
             target_name, error = resolve_personnel_name(args.name, personnel, aliases=aliases)
 
             if error:
-                # Fallback: search YAML config directly (for newly added people not in reports)
-                config_names = [p["name"] for p in config.get("personnel", [])]
-                matches = [n for n in config_names if args.name.lower() in n.lower()]
-                if len(matches) == 1:
-                    target_name = matches[0]
-                    error = None
-                    if target_name != args.name:
-                        print(f"Resolved '{args.name}' to: {target_name}")
-                elif len(matches) > 1:
-                    match_list = "\n".join(f"  - {m}" for m in matches)
-                    raise ValueError(f"Multiple personnel matching '{args.name}':\n{match_list}")
-                else:
-                    raise ValueError(error)
+                raise ValueError(error)
 
             if target_name != args.name:
                 print(f"Resolved '{args.name}' to: {target_name}")

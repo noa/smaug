@@ -10,7 +10,7 @@ CLI commands delegate here for computation, then handle formatting.
 
 import contextlib
 import sys
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -27,10 +27,17 @@ def _dec(val: Decimal | None) -> float | None:
 
 
 def _date_str(d: date | None) -> str | None:
-    """Convert date to ISO string for JSON serialization."""
+    """Convert date to a YYYY-MM string for JSON serialization."""
     if d is None:
         return None
     return d.strftime("%Y-%m")
+
+
+def _date_full(d: date | None) -> str | None:
+    """Convert date to a full ISO string, for dates where the day is meaningful."""
+    if d is None:
+        return None
+    return d.isoformat()
 
 
 class SmaugAPI:
@@ -97,9 +104,10 @@ class SmaugAPI:
             if isinstance(value, str):
                 # Replace any real names with their anonymized form.
                 # Process longest names first to avoid partial replacements.
-                for real_name in sorted(Anonymizer._real_to_anon, key=len, reverse=True):
+                scrub_map = Anonymizer.scrub_map()
+                for real_name in sorted(scrub_map, key=len, reverse=True):
                     if real_name in value:
-                        value = value.replace(real_name, Anonymizer._real_to_anon[real_name])
+                        value = value.replace(real_name, scrub_map[real_name])
                 return value
             if isinstance(value, dict):
                 return {k: _scrub(v) for k, v in value.items()}
@@ -108,6 +116,13 @@ class SmaugAPI:
             return value
 
         return _scrub(result)  # type: ignore[return-value]
+
+    @staticmethod
+    def _anon(name: str | None) -> str | None:
+        """Anonymized display name, when anonymization is enabled."""
+        from .cli._util import Anonymizer
+
+        return Anonymizer.anonymize(name)
 
     @staticmethod
     @contextlib.contextmanager
@@ -146,7 +161,13 @@ class SmaugAPI:
 
         Returns:
             List of dicts with keys: id, name, status, end_date, budget,
-            spent, pct_spent, monthly_burn, projected_total, projected_remaining.
+            funded_ceiling, ceiling_source, spent, committed, pct_spent,
+            monthly_burn, projection_through, projected_total,
+            projected_remaining.
+
+            ``budget`` is the authorized total; ``funded_ceiling`` is what the
+            sponsor has actually obligated, and is what ``projected_remaining``
+            and ``pct_spent`` are measured against.
         """
         from .projections import load_personnel_config, project_monthly_costs
 
@@ -168,26 +189,33 @@ class SmaugAPI:
         if config_path.exists():
             rates, personnel = load_personnel_config(config_path)
 
+        from .budget_resolution import (
+            resolve_award_end_date,
+            resolve_funded_ceiling,
+            resolve_project_budget,
+        )
+
         results = []
         for project_id in project_ids:
             data = store.get_project(project_id)
             if not data:
                 continue
 
-            budget = Decimal("0")
-            if data.budget:
-                budget = data.budget.total_budget
-            elif data.project.total_budget:
-                budget = data.project.total_budget
+            budget, _ = resolve_project_budget(store, project_id, self._data_dir)
+            ceiling, ceiling_source = resolve_funded_ceiling(store, project_id, self._data_dir)
 
             spent = Decimal("0")
+            committed = Decimal("0")
             if data.spending:
                 latest = max(data.spending, key=lambda r: (r.year, r.month))
                 spent = latest.total_spent
+                committed = latest.total_committed or Decimal("0")
 
             monthly_burn = Decimal("0")
             proj_total = Decimal("0")
-            project_end = data.project.end_date
+            # The sponsor's reported award end supersedes the manifest, which
+            # goes stale whenever the award is extended.
+            project_end, _end_source = resolve_award_end_date(store, project_id)
 
             if rates and personnel and data.project.status == ProjectStatus.ACTIVE:
                 with contextlib.suppress(Exception):
@@ -210,27 +238,32 @@ class SmaugAPI:
                         )
                         if current.year == today.year and current.month == today.month:
                             monthly_burn = proj.total
-                        if proj.total == 0:
-                            break
                         proj_total += proj.total
                         if current.month == 12:
                             current = current.replace(year=current.year + 1, month=1)
                         else:
                             current = current.replace(month=current.month + 1)
 
-            remaining = budget - spent - proj_total if budget else Decimal("0")
-            pct_spent = float(spent / budget * 100) if budget and spent else 0.0
+            # Remaining runway is bounded by what the sponsor has obligated,
+            # not by what the award is authorized for across all option years.
+            spendable = ceiling if ceiling > Decimal("0") else budget
+            remaining = spendable - spent - proj_total if spendable else Decimal("0")
+            pct_spent = float(spent / spendable * 100) if spendable and spent else 0.0
 
             results.append(
                 {
                     "id": project_id,
                     "name": data.project.name,
                     "status": data.project.status.value,
-                    "end_date": _date_str(project_end),
+                    "end_date": _date_full(project_end),
                     "budget": _dec(budget),
+                    "funded_ceiling": _dec(ceiling) if ceiling > Decimal("0") else None,
+                    "ceiling_source": ceiling_source if ceiling > Decimal("0") else None,
                     "spent": _dec(spent),
+                    "committed": _dec(committed),
                     "pct_spent": round(pct_spent, 1),
                     "monthly_burn": _dec(monthly_burn),
+                    "projection_through": _date_full(project_end),
                     "projected_total": _dec(proj_total),
                     "projected_remaining": _dec(remaining),
                 }
@@ -506,9 +539,16 @@ class SmaugAPI:
                 months_to_stopwork = (sy - now.year) * 12 + (sm - now.month)
                 if months_to_stopwork <= 3:
                     runway_status = "critical"
-                    warnings.append(
-                        f"Critical runway alert: Funding is projected to run out in {max(0, months_to_stopwork)} months ({stop_month})."
-                    )
+                    if months_to_stopwork < 0:
+                        past_months = abs(months_to_stopwork)
+                        plural = "s" if past_months != 1 else ""
+                        warnings.append(
+                            f"Critical runway alert: Funding ran out {past_months} month{plural} ago ({stop_month})."
+                        )
+                    else:
+                        warnings.append(
+                            f"Critical runway alert: Funding is projected to run out in {months_to_stopwork} months ({stop_month})."
+                        )
                 elif months_to_stopwork <= 6:
                     runway_status = "at_risk"
 
@@ -526,10 +566,13 @@ class SmaugAPI:
         current_allocations = []
         upcoming_transitions = []
         total_active_fte = Decimal("0")
+        active_persons = set()
 
         for p in config_personnel:
             total_effort_all = sum(
-                a.effort for a in p.assignments if is_active(a, now.year, now.month, p.departure)
+                a.effort
+                for a in p.assignments
+                if is_active(a, now.year, now.month, p.departure) and a.effort > Decimal("0")
             )
             is_overcommitted = total_effort_all > Decimal("1.0")
 
@@ -538,28 +581,37 @@ class SmaugAPI:
             if not project_assignments:
                 continue
 
-            active_this_month = False
-            for a in project_assignments:
-                if is_active(a, now.year, now.month, p.departure):
-                    active_this_month = True
-                    total_active_fte += a.effort
+            # Determine active and upcoming assignments for this person on this project
+            active_segment = next(
+                (
+                    a
+                    for a in project_assignments
+                    if is_active(a, now.year, now.month, p.departure) and a.effort > Decimal("0")
+                ),
+                None,
+            )
+            if active_segment:
+                active_persons.add(p.name)
+                total_active_fte += active_segment.effort
 
-                # Check transitions
-                if a.end:
-                    months_to_end = (a.end.year - now.year) * 12 + (a.end.month - now.month)
-                    if 0 <= months_to_end <= 12:
-                        upcoming_transitions.append(
-                            {
-                                "person": Anonymizer.anonymize(p.name),
-                                "event": "assignment_end",
-                                "date": _date_str(a.end),
-                                "description": f"{Anonymizer.anonymize(p.name)}'s assignment on {project} ends in {_date_str(a.end)}.",
-                            }
-                        )
-                    if data.project.end_date and a.end < data.project.end_date:
-                        warnings.append(
-                            f"Personnel '{Anonymizer.anonymize(p.name)}' assignment on {project} ends on {_date_str(a.end)} before project end date ({_date_str(data.project.end_date)})."
-                        )
+            # Transitions and assignment end warnings (per person, using latest end date)
+            valid_ends = [a.end for a in project_assignments if a.end]
+            latest_end = max(valid_ends) if valid_ends else None
+            if latest_end:
+                months_to_end = (latest_end.year - now.year) * 12 + (latest_end.month - now.month)
+                if 0 <= months_to_end <= 12:
+                    upcoming_transitions.append(
+                        {
+                            "person": Anonymizer.anonymize(p.name),
+                            "event": "assignment_end",
+                            "date": _date_str(latest_end),
+                            "description": f"{Anonymizer.anonymize(p.name)}'s assignment on {project} ends in {_date_str(latest_end)}.",
+                        }
+                    )
+                if data.project.end_date and latest_end < data.project.end_date:
+                    warnings.append(
+                        f"Personnel '{Anonymizer.anonymize(p.name)}' assignment on {project} ends on {_date_str(latest_end)} before project end date ({_date_str(data.project.end_date)})."
+                    )
 
             if p.departure:
                 months_to_dep = (p.departure.year - now.year) * 12 + (p.departure.month - now.month)
@@ -582,12 +634,6 @@ class SmaugAPI:
             by_project = tracker.get_person_by_project(p.name)
             person_spent = float(by_project.get(project, Decimal("0")))
 
-            # Monthly costs for this person
-            first_assign = project_assignments[0]
-            effort_pct = float(first_assign.effort * 100)
-
-            # Calculate monthly salary and fringe
-            m_sal = (p.annual_salary / 12) * first_assign.effort
             fringe_rate = (
                 rates.fringe.get(p.person_type, Decimal("0.34")) if rates else Decimal("0.34")
             )
@@ -597,49 +643,58 @@ class SmaugAPI:
                     if now.month in (6, 7, 8) and rates
                     else Decimal("0.0")
                 )
-            m_fringe = m_sal * fringe_rate
-            m_tuition = Decimal("0")
-            m_insurance = Decimal("0")
-            if rates:
-                if p.person_type == "grad_student":
-                    m_tuition = (rates.tuition_per_semester * 2 / 12) * first_assign.effort
-                    m_insurance = (rates.insurance_annual / 12) * first_assign.effort
-                elif p.person_type == "masters_student":
-                    if p.include_tuition:
-                        m_tuition = (
-                            rates.masters_tuition_per_semester * 2 / 12
-                        ) * first_assign.effort
-                    if p.include_insurance:
-                        m_insurance = (rates.insurance_annual / 12) * first_assign.effort
-
             idc_rate = rates.idc if rates else Decimal("0.55")
-            m_total = (
-                m_sal
-                + m_fringe
-                + m_tuition
-                + m_insurance
-                + (m_sal + m_fringe + m_insurance) * idc_rate
-            )
 
-            current_allocations.append(
-                {
-                    "name": Anonymizer.anonymize(p.name),
-                    "type": p.person_type,
-                    "effort_pct": effort_pct,
-                    "annual_salary": _dec(p.annual_salary),
-                    "monthly_direct_salary": _dec(m_sal),
-                    "monthly_fringe": _dec(m_fringe),
-                    "monthly_tuition_and_insurance": _dec(m_tuition + m_insurance),
-                    "monthly_total_cost": _dec(m_total),
-                    "assignment_start": _date_str(first_assign.start),
-                    "assignment_end": _date_str(first_assign.end),
-                    "departure": _date_str(p.departure),
-                    "total_effort_across_projects": round(float(total_effort_all * 100), 1),
-                    "is_overcommitted": is_overcommitted,
-                    "total_spent_to_date": round(person_spent, 2),
-                    "is_active_now": active_this_month,
-                }
-            )
+            # Iterate over all project assignments so multi-segment allocations are documented with is_active_now
+            for assign in project_assignments:
+                is_segment_active = is_active(
+                    assign, now.year, now.month, p.departure
+                ) and assign.effort > Decimal("0")
+                effort_pct = float(assign.effort * 100)
+
+                m_sal = (p.annual_salary / 12) * assign.effort
+                m_fringe = m_sal * fringe_rate
+                m_tuition = Decimal("0")
+                m_insurance = Decimal("0")
+                if rates:
+                    if p.person_type == "grad_student":
+                        m_tuition = (rates.tuition_per_semester * 2 / 12) * assign.effort
+                        m_insurance = (rates.insurance_annual / 12) * assign.effort
+                    elif p.person_type == "masters_student":
+                        if p.include_tuition:
+                            m_tuition = (
+                                rates.masters_tuition_per_semester * 2 / 12
+                            ) * assign.effort
+                        if p.include_insurance:
+                            m_insurance = (rates.insurance_annual / 12) * assign.effort
+
+                m_total = (
+                    m_sal
+                    + m_fringe
+                    + m_tuition
+                    + m_insurance
+                    + (m_sal + m_fringe + m_insurance) * idc_rate
+                )
+
+                current_allocations.append(
+                    {
+                        "name": Anonymizer.anonymize(p.name),
+                        "type": p.person_type,
+                        "effort_pct": effort_pct,
+                        "annual_salary": _dec(p.annual_salary),
+                        "monthly_direct_salary": _dec(m_sal),
+                        "monthly_fringe": _dec(m_fringe),
+                        "monthly_tuition_and_insurance": _dec(m_tuition + m_insurance),
+                        "monthly_total_cost": _dec(m_total),
+                        "assignment_start": _date_str(assign.start),
+                        "assignment_end": _date_str(assign.end),
+                        "departure": _date_str(p.departure),
+                        "total_effort_across_projects": round(float(total_effort_all * 100), 1),
+                        "is_overcommitted": is_overcommitted,
+                        "total_spent_to_date": round(person_spent, 2),
+                        "is_active_now": is_segment_active,
+                    }
+                )
 
         # 8. Audit Findings & Parse Warnings
         with contextlib.suppress(Exception):
@@ -719,7 +774,7 @@ class SmaugAPI:
                     "runway_status": runway_status,
                 },
                 "personnel": {
-                    "active_headcount": sum(1 for p in current_allocations if p["is_active_now"]),
+                    "active_headcount": len(active_persons),
                     "total_effort_fte": round(float(total_active_fte), 2),
                     "current_allocations": current_allocations,
                     "projected_effort": projections_12m,
@@ -784,11 +839,20 @@ class SmaugAPI:
             "pct_remaining": None,
         }
 
-        if data.budget:
+        total_budget = Decimal("0")
+        if data.budget and data.budget.total_budget > 0:
+            total_budget = data.budget.total_budget
             result["budget"] = {
                 "total_direct_costs": _dec(data.budget.total_direct_costs),
                 "total_indirect_costs": _dec(data.budget.total_indirect_costs),
                 "total_budget": _dec(data.budget.total_budget),
+            }
+        elif data.project.total_budget and data.project.total_budget > 0:
+            total_budget = data.project.total_budget
+            result["budget"] = {
+                "total_direct_costs": None,
+                "total_indirect_costs": None,
+                "total_budget": _dec(data.project.total_budget),
             }
 
         if data.spending:
@@ -811,12 +875,10 @@ class SmaugAPI:
                 "other": _dec(latest.other_spent),
                 "indirect": _dec(latest.indirect_spent),
             }
-            if data.budget and data.budget.total_budget > 0:
-                remaining = data.budget.total_budget - latest.total_spent_and_committed
+            if total_budget > Decimal("0"):
+                remaining = total_budget - latest.total_spent_and_committed
                 result["remaining"] = _dec(remaining)
-                result["pct_remaining"] = round(
-                    float(remaining / data.budget.total_budget * 100), 1
-                )
+                result["pct_remaining"] = round(float(remaining / total_budget * 100), 1)
 
         return result
 
@@ -870,7 +932,8 @@ class SmaugAPI:
 
         store = self._get_store()
         json_str = store.dump_json(project)
-        return dict(json.loads(json_str))
+        res = dict(json.loads(json_str))
+        return self._sanitize_result(res)
 
     def spending_projection(
         self, project: str, months: int = 12, end_date: str | None = None
@@ -953,14 +1016,21 @@ class SmaugAPI:
     def stopwork_forecast(self, project: str, ceiling: float | None = None) -> dict:
         """Predict fund exhaustion date under current spend rate.
 
+        Measured against the funded ceiling rather than the authorized budget,
+        and never projected past the award end date.
+
         Args:
             project: Project short name.
             ceiling: Override funding ceiling amount.
 
         Returns:
-            Dict with keys: project, ceiling, ceiling_source,
-            cumulative_spent, stop_month, stop_day, monthly_projections.
+            Dict with keys: project, ceiling, ceiling_source, cumulative_spent,
+            outstanding_commitments, spent_and_committed, already_over_ceiling,
+            over_ceiling_amount, as_of, award_end_date, award_end_source,
+            forecast_horizon_months, stop_month, stop_day, commitment_details,
+            monthly_projections.
         """
+        from .budget_resolution import resolve_award_end_date, resolve_funded_ceiling
         from .projections import project_spending
 
         store = self._get_store()
@@ -971,22 +1041,17 @@ class SmaugAPI:
         if not data.spending:
             return {"error": f"No spending reports found for {project}"}
 
-        latest = data.spending[-1]
+        latest = max(data.spending, key=lambda r: (r.year, r.month))
 
         if ceiling is not None:
             effective_ceiling = Decimal(str(ceiling))
             ceiling_source = "user-provided"
-        elif latest.funded_ceiling:
-            effective_ceiling = latest.funded_ceiling
-            ceiling_source = "report"
-        elif data.budget and data.budget.total_budget:
-            effective_ceiling = data.budget.total_budget
-            ceiling_source = "budget"
-        elif data.project and data.project.total_budget:
-            effective_ceiling = data.project.total_budget
-            ceiling_source = "manifest"
         else:
-            return {"error": "No funded ceiling or budget found"}
+            effective_ceiling, ceiling_source = resolve_funded_ceiling(
+                store, project, self._data_dir
+            )
+            if effective_ceiling <= Decimal("0"):
+                return {"error": "No funded ceiling or budget found"}
 
         cumulative = latest.total_spent
 
@@ -1001,11 +1066,23 @@ class SmaugAPI:
         else:
             start = start.replace(month=start.month + 1)
 
+        # Never forecast past the end of the award: months beyond it are not
+        # spending the project can do, and reporting them as "ok" reads as
+        # runway that does not exist.
+        award_end, award_end_source = resolve_award_end_date(store, project)
+        horizon = 60
+        if award_end:
+            horizon = max(
+                1,
+                (award_end.year - start.year) * 12 + (award_end.month - start.month) + 1,
+            )
+            horizon = min(horizon, 60)
+
         projections = project_spending(
             project,
             self._config_path(),
             start_date=start,
-            months=18,
+            months=horizon,
             travel_items=travel_items,
             expense_items=expense_items,
         )
@@ -1047,15 +1124,40 @@ class SmaugAPI:
                 if count_after >= 2:
                     break
 
-        return {
+        # Outstanding commitments are salary the sponsor's funds are already
+        # obligated to; they exhaust the ceiling whether or not anyone projects
+        # further spending.
+        committed = latest.total_committed or Decimal("0")
+        spent_and_committed = latest.total_spent + committed
+        commitments = [
+            {
+                "person": self._anon(c.person_name),
+                "type": c.employee_type.value,
+                "salary_committed": _dec(c.salary_committed),
+                "encumbered_through": _date_full(c.encumbrance_end),
+            }
+            for c in latest.commitment_details
+        ]
+
+        result = {
             "project": project,
             "ceiling": _dec(effective_ceiling),
             "ceiling_source": ceiling_source,
             "cumulative_spent": _dec(latest.total_spent),
+            "outstanding_commitments": _dec(committed),
+            "spent_and_committed": _dec(spent_and_committed),
+            "already_over_ceiling": spent_and_committed > effective_ceiling,
+            "over_ceiling_amount": _dec(max(Decimal("0"), spent_and_committed - effective_ceiling)),
+            "as_of": latest.period,
+            "award_end_date": _date_full(award_end),
+            "award_end_source": award_end_source,
+            "forecast_horizon_months": horizon,
             "stop_month": stop_month,
             "stop_day": stop_day,
+            "commitment_details": commitments,
             "monthly_projections": monthly,
         }
+        return self._sanitize_result(result)
 
     def audit(self, project: str | None = None, months: int = 3, threshold: float = 10.0) -> dict:
         """Flag discrepancies between expected and actual effort.
@@ -1069,6 +1171,7 @@ class SmaugAPI:
             Dict with keys: project, periods, findings, summary.
         """
         from .audit import audit_project
+        from .cli._util import load_aliases
 
         store = self._get_store()
         config_path = self._config_path()
@@ -1076,6 +1179,7 @@ class SmaugAPI:
         if not config_path.exists():
             return {"error": "Personnel config not found"}
 
+        aliases = load_aliases(self.data_dir)
         tracker = store.get_personnel_tracker()
         all_allocations = []
         for person_name in tracker.get_all_personnel():
@@ -1091,6 +1195,7 @@ class SmaugAPI:
                 actual_allocations=all_allocations,
                 months_back=months,
                 threshold_pct=Decimal(str(threshold)),
+                aliases=aliases,
             )
             from .cli._util import Anonymizer
 
@@ -1982,7 +2087,15 @@ class SmaugAPI:
     # ------------------------------------------------------------------
 
     def budget_vs_actuals(self, project: str) -> dict:
-        """Compare projected spending against contractual budget ceilings."""
+        """Compare actual and projected spending against contractual budget periods.
+
+        Reports state cumulative spend, so each period's actual is the change in
+        cumulative across it. Any spending that predates the earliest available
+        report is spread across the months it covers and reported under
+        ``opening_balance`` rather than dropped, so ``total_actual`` reconciles
+        to ``cumulative_spent``.
+        """
+        from .budget_resolution import resolve_budget_config_path
         from .contractual_budget import load_contractual_budget
         from .projections import load_personnel_config, project_monthly_costs
 
@@ -1991,10 +2104,7 @@ class SmaugAPI:
         if not data:
             return {"error": f"Project not found: {project}"}
 
-        budget_config_path = None
-        if data.project.budget_dir:
-            budget_config_path = Path(data.project.budget_dir) / "budget_config.yaml"
-
+        budget_config_path = resolve_budget_config_path(store, project, self._data_dir)
         if not budget_config_path or not budget_config_path.exists():
             return {"error": f"No contractual budget config found for {project}"}
 
@@ -2009,6 +2119,47 @@ class SmaugAPI:
             rates, personnel = load_personnel_config(config_path)
 
         today = date.today()
+
+        # Reports state cumulative spend, so a period's actual is the change in
+        # cumulative across it. The earliest report already carries every dollar
+        # spent before it -- for ARTS that is the $544,880.73 opening balance --
+        # and differencing alone drops that silently. Spread it across the
+        # months it actually covers instead, and report what was spread.
+        reports = sorted(data.spending, key=lambda r: (r.year, r.month))
+        opening_balance = Decimal("0")
+        opening_start: date | None = None
+        opening_end: date | None = None
+        opening_months = 0
+
+        if reports:
+            first = reports[0]
+            first_month = date(first.year, first.month, 1)
+            opening_balance = first.total_spent - (first.total_month or Decimal("0"))
+            if opening_balance > Decimal("0"):
+                award_start = first.budget_start_date or contract.start_date
+                if award_start and award_start < first_month:
+                    opening_start = award_start.replace(day=1)
+                    opening_end = first_month - timedelta(days=1)
+                    opening_months = (first_month.year - opening_start.year) * 12 + (
+                        first_month.month - opening_start.month
+                    )
+            if opening_months <= 0:
+                opening_balance = Decimal("0")
+
+        def cumulative_at(as_of: date) -> Decimal:
+            """Cumulative spend through ``as_of``, including unreported opening spend."""
+            reported = [r for r in reports if date(r.year, r.month, 1) <= as_of]
+            if reported:
+                return max(reported, key=lambda r: (r.year, r.month)).total_spent
+
+            # Before the first report: pro-rate the opening balance by month.
+            if not opening_months or opening_start is None or as_of < opening_start:
+                return Decimal("0")
+            elapsed = (
+                (as_of.year - opening_start.year) * 12 + (as_of.month - opening_start.month) + 1
+            )
+            elapsed = min(elapsed, opening_months)
+            return opening_balance * Decimal(elapsed) / Decimal(opening_months)
 
         periods_out = []
         total_budget = Decimal("0")
@@ -2027,34 +2178,9 @@ class SmaugAPI:
             projected_amt = Decimal("0")
 
             if is_past or is_current:
-                period_reports = [
-                    r
-                    for r in data.spending
-                    if period.start <= date(r.year, r.month, 1) <= period.end
-                ]
-                if period_reports:
-                    latest = max(period_reports, key=lambda r: (r.year, r.month))
-                    earliest = min(period_reports, key=lambda r: (r.year, r.month))
-
-                    if period.year_num == 1:
-                        actual_amt = latest.total_spent
-                    else:
-                        prior_period = contract.get_period_by_year(period.year_num - 1)
-                        prior_ending = Decimal("0")
-                        if prior_period:
-                            prior_reports = [
-                                r
-                                for r in data.spending
-                                if prior_period.start
-                                <= date(r.year, r.month, 1)
-                                <= prior_period.end
-                            ]
-                            if prior_reports:
-                                prior_latest = max(prior_reports, key=lambda r: (r.year, r.month))
-                                prior_ending = prior_latest.total_spent
-                            else:
-                                prior_ending = earliest.total_spent
-                        actual_amt = latest.total_spent - prior_ending
+                actual_amt = cumulative_at(period.end) - cumulative_at(
+                    period.start - timedelta(days=1)
+                )
 
             if (is_current or is_future) and rates and personnel:
                 proj_start = today.replace(day=1) if is_current else period.start
@@ -2109,7 +2235,9 @@ class SmaugAPI:
                 }
             )
 
-        return {
+        latest_cumulative = reports[-1].total_spent if reports else Decimal("0")
+
+        res = {
             "project": project,
             "award_id": contract.award_id,
             "total_budget": round(float(total_budget), 2),
@@ -2117,7 +2245,19 @@ class SmaugAPI:
             "total_actual": round(float(total_actual), 2),
             "total_projected": round(float(total_projected), 2),
             "total_variance": round(float(total_budget - total_actual - total_projected), 2),
+            "cumulative_spent": round(float(latest_cumulative), 2),
+            "reconciles": abs(total_actual - latest_cumulative) < Decimal("0.01"),
         }
+        if opening_balance > Decimal("0") and opening_start and opening_end:
+            res["opening_balance"] = {
+                "amount": round(float(opening_balance), 2),
+                "covers": f"{opening_start.strftime('%b %Y')} - {opening_end.strftime('%b %Y')}",
+                "note": (
+                    "Spent before the earliest available report and allocated evenly "
+                    "across those months; no monthly detail exists to split it exactly."
+                ),
+            }
+        return self._sanitize_result(res)
 
     # ------------------------------------------------------------------
     # Write: set_salary
@@ -2159,7 +2299,13 @@ class SmaugAPI:
     # Write: set_assignment_end
     # ------------------------------------------------------------------
 
-    def set_assignment_end(self, name: str, project: str, end_date: str) -> dict:
+    def set_assignment_end(
+        self,
+        name: str,
+        project: str,
+        end_date: str,
+        start_date: str | None = None,
+    ) -> dict:
         """Set or clear end date for a person's project assignment."""
         from .cli._write_commands import cmd_set_end
 
@@ -2170,13 +2316,24 @@ class SmaugAPI:
 
         with self._suppress_stdout():
             try:
-                cmd_set_end(
-                    self._get_store(),
-                    DummyArgs(data_dir=self.data_dir, name=name, project=project, date=end_date),
+                args = DummyArgs(
+                    data_dir=self.data_dir,
+                    name=name,
+                    project=project,
+                    date=end_date,
+                    start=start_date,
                 )
+                cmd_set_end(self._get_store(), args)
                 self._store = None  # Invalidate cache so reads reflect the write
+                resulting_assignments = getattr(args, "_resulting_assignments", [])
                 return self._sanitize_result(
-                    {"success": True, "name": name, "project": project, "end_date": end_date}
+                    {
+                        "success": True,
+                        "name": name,
+                        "project": project,
+                        "end_date": end_date,
+                        "assignments": resulting_assignments,
+                    }
                 )
             except Exception as e:
                 return self._sanitize_result({"error": str(e)})
@@ -2330,20 +2487,94 @@ class SmaugAPI:
                             f"Project '{project_id}' has missing invoice gaps: {', '.join(missing_invs)}."
                         )
 
-        # 3. Parse warnings
+        # 3. Funded ceiling vs. spend and commitments
+        from .budget_resolution import resolve_award_end_date, resolve_funded_ceiling
+
+        for project_id in projects:
+            data = store.get_project(project_id)
+            if not data or not data.spending:
+                continue
+            latest = max(data.spending, key=lambda r: (r.year, r.month))
+            ceiling, ceiling_source = resolve_funded_ceiling(store, project_id, self._data_dir)
+            if ceiling > Decimal("0"):
+                committed = latest.total_committed or Decimal("0")
+                exposure = latest.total_spent + committed
+                if exposure > ceiling:
+                    warnings.append(
+                        f"Project '{project_id}' is over its funded ceiling: "
+                        f"${exposure:,.2f} spent and committed as of {latest.period} against "
+                        f"${ceiling:,.2f} ({ceiling_source}), over by ${exposure - ceiling:,.2f}."
+                    )
+                elif latest.total_spent > ceiling:
+                    warnings.append(
+                        f"Project '{project_id}' has spent ${latest.total_spent:,.2f} against a "
+                        f"funded ceiling of ${ceiling:,.2f} ({ceiling_source})."
+                    )
+
+            # 4. Award end date recorded in the manifest vs. the sponsor's report
+            award_end, end_source = resolve_award_end_date(store, project_id)
+            manifest_end = data.project.end_date
+            if (
+                award_end
+                and manifest_end
+                and end_source.startswith("report")
+                and (award_end.year, award_end.month) != (manifest_end.year, manifest_end.month)
+            ):
+                warnings.append(
+                    f"Project '{project_id}' manifest end_date is {manifest_end:%Y-%m} but the "
+                    f"{latest.period} report gives {award_end:%Y-%m-%d}; forecasts use the "
+                    f"reported date. Update manifest.yaml to match."
+                )
+
+        # 5. Reports filed under the wrong directory
+        for report_dir, expected in (
+            (store.reports_dir / "sponsored", "sponsored"),
+            (store.reports_dir / "non-sponsored", "discretionary"),
+        ):
+            if not report_dir.exists():
+                continue
+            known_projects = [store.get_project(pid) for pid in projects]
+            for report_file in sorted(report_dir.glob("*.pdf")):
+                stem = report_file.stem
+                matched = None
+                for pdata in known_projects:
+                    if not pdata:
+                        continue
+                    proj = pdata.project
+                    for ident in (proj.grant_number, proj.funded_program):
+                        if ident and stem.startswith(str(ident)):
+                            matched = proj.project_type.value
+                            break
+                    if matched:
+                        break
+                if matched and matched != expected:
+                    warnings.append(
+                        f"Report '{report_file.name}' is a {matched} report filed under "
+                        f"reports/{report_dir.name}/; move it so it parses with the right parser."
+                    )
+
+        # 6. Parse warnings
         for pw in store.get_parse_warnings():
             warnings.append(f"Parse warning in {pw.file}: {pw.message}")
 
-        # 4. Personnel over-commitments
+        # 7. Personnel over-commitments
         config_path = self._config_path()
         if config_path.exists():
             try:
+                from .projections import is_active
+
+                today = date.today()
                 _rates, config_personnel = load_personnel_config(config_path)
                 for p in config_personnel:
-                    total_effort = sum(a.effort for a in p.assignments)
-                    if total_effort > Decimal("1.0"):
+                    active_effort = sum(
+                        a.effort
+                        for a in p.assignments
+                        if is_active(a, today.year, today.month, p.departure)
+                        and a.effort > Decimal("0")
+                    )
+                    if active_effort > Decimal("1.0"):
                         warnings.append(
-                            f"Personnel '{Anonymizer.anonymize(p.name)}' is over-committed at {total_effort * 100:.0f}% total effort across projects."
+                            f"Personnel '{Anonymizer.anonymize(p.name)}' is over-committed at {active_effort * 100:.0f}% total effort across projects."
                         )
             except Exception as e:
                 warnings.append(f"Personnel config error: {e}")
@@ -2602,13 +2833,17 @@ class SmaugAPI:
 
         with self._suppress_stdout():
             try:
-                cmd_set_project_end(
-                    self._get_store(),
-                    DummyArgs(data_dir=self.data_dir, project=project, date=end_date),
-                )
+                args = DummyArgs(data_dir=self.data_dir, project=project, date=end_date)
+                cmd_set_project_end(self._get_store(), args)
                 self._store = None
+                warnings = getattr(args, "_warnings", [])
                 return self._sanitize_result(
-                    {"success": True, "project": project, "end_date": end_date}
+                    {
+                        "success": True,
+                        "project": project,
+                        "end_date": end_date,
+                        "warnings": warnings,
+                    }
                 )
             except Exception as e:
                 return self._sanitize_result({"error": str(e)})

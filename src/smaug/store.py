@@ -41,6 +41,9 @@ from .validation import ParseWarning, validate_report
 logger = logging.getLogger(__name__)
 
 
+_REPORT_PARSE_CACHE: dict[tuple[str, float, int], tuple[SpendingReport | None, list]] = {}
+
+
 class ProjectStore:
     """
     Central store for all project data.
@@ -88,12 +91,9 @@ class ProjectStore:
 
         # Load sponsored projects
         for short_name, config in manifest.get("projects", {}).items():
-            budget_val = config.get("total_budget")
             status_str = config.get("status", "active")
-            try:
-                status = ProjectStatus(status_str)
-            except ValueError:
-                status = ProjectStatus.ACTIVE
+            status = ProjectStatus(status_str) if status_str else ProjectStatus.ACTIVE
+            budget_val = config.get("total_budget") or config.get("budget")
             self._projects[short_name] = Project(
                 short_name=short_name,
                 name=config.get("name", short_name),
@@ -104,15 +104,16 @@ class ProjectStore:
                 sponsored_program=config.get("sponsored_program"),
                 award_id=config.get("award_id"),
                 budget_dir=config.get("budget_dir"),
+                reports_dir=config.get("reports_dir"),
                 end_date=parse_date_str(config.get("end_date")),
                 total_budget=Decimal(str(budget_val)) if budget_val else None,
             )
 
-        # Load discretionary accounts (always active or completed)
+        # Load non-sponsored / discretionary accounts
         for short_name, config in manifest.get("discretionary", {}).items():
-            budget_val = config.get("total_budget")
             status_str = config.get("status", "active")
-            status = ProjectStatus.COMPLETED if status_str == "completed" else ProjectStatus.ACTIVE
+            status = ProjectStatus(status_str) if status_str else ProjectStatus.ACTIVE
+            budget_val = config.get("total_budget") or config.get("budget")
             self._projects[short_name] = Project(
                 short_name=short_name,
                 name=config.get("name", short_name),
@@ -131,6 +132,8 @@ class ProjectStore:
         for short_name, project in self._projects.items():
             if project.budget_dir:
                 budget_dir = Path(project.budget_dir)
+                if not budget_dir.is_absolute():
+                    budget_dir = self.data_dir / budget_dir
                 if budget_dir.exists():
                     # Find budget Excel files
                     for xlsx_file in budget_dir.glob("*[Bb]udget*.xlsx"):
@@ -150,7 +153,20 @@ class ProjectStore:
             for report_file in sorted(report_dir.glob("*")):
                 if report_file.is_dir():
                     continue
-                report, personnel = _plugin_parse_report(report_file, self._report_parsers)
+
+                try:
+                    stat = report_file.stat()
+                    cache_key = (str(report_file.resolve()), stat.st_mtime, stat.st_size)
+                except OSError:
+                    cache_key = None
+
+                if cache_key and cache_key in _REPORT_PARSE_CACHE:
+                    report, personnel = _REPORT_PARSE_CACHE[cache_key]
+                else:
+                    report, personnel = _plugin_parse_report(report_file, self._report_parsers)
+                    if cache_key:
+                        _REPORT_PARSE_CACHE[cache_key] = (report, personnel)
+
                 if report:
                     # Validate before storing
                     prior = self._spending.get(
@@ -315,7 +331,11 @@ class ProjectStore:
         # 1. Load from project-specific invoice directories
         for short_name, project in self._projects.items():
             if project.budget_dir:
-                invoice_dir = Path(project.budget_dir) / "invoices"
+                # budget_dir is normally relative to the data directory
+                budget_dir = Path(project.budget_dir)
+                if not budget_dir.is_absolute():
+                    budget_dir = self.data_dir / budget_dir
+                invoice_dir = budget_dir / "invoices"
                 if invoice_dir.exists():
                     invoice_files = find_invoices(invoice_dir)
                     for pdf_path in invoice_files:
@@ -443,12 +463,18 @@ class ProjectStore:
                     "budget_utilized_pct": str(r.budget_utilized_pct)
                     if r.budget_utilized_pct
                     else None,
+                    "total_month": str(r.total_month) if r.total_month is not None else None,
                     "salary_spent": str(r.salary_spent),
                     "fringe_spent": str(r.fringe_spent),
                     "tuition_spent": str(r.tuition_spent),
                     "insurance_spent": str(r.insurance_spent),
                     "service_center_spent": str(r.service_center_spent),
                     "travel_spent": str(r.travel_spent),
+                    "travel_foreign_spent": str(r.travel_foreign_spent),
+                    "supplies_spent": str(r.supplies_spent),
+                    "equipment_spent": str(r.equipment_spent),
+                    "subcontracts_spent": str(r.subcontracts_spent),
+                    "consultant_spent": str(r.consultant_spent),
                     "other_spent": str(r.other_spent),
                     "salary_month": str(r.salary_month) if r.salary_month is not None else None,
                     "fringe_month": str(r.fringe_month) if r.fringe_month is not None else None,
@@ -460,13 +486,65 @@ class ProjectStore:
                     if r.service_center_month is not None
                     else None,
                     "travel_month": str(r.travel_month) if r.travel_month is not None else None,
+                    "travel_foreign_month": str(r.travel_foreign_month)
+                    if r.travel_foreign_month is not None
+                    else None,
+                    "supplies_month": str(r.supplies_month)
+                    if r.supplies_month is not None
+                    else None,
+                    "equipment_month": str(r.equipment_month)
+                    if r.equipment_month is not None
+                    else None,
+                    "subcontracts_month": str(r.subcontracts_month)
+                    if r.subcontracts_month is not None
+                    else None,
+                    "consultant_month": str(r.consultant_month)
+                    if r.consultant_month is not None
+                    else None,
                     "other_month": str(r.other_month) if r.other_month is not None else None,
                     "indirect_month": str(r.indirect_month)
                     if r.indirect_month is not None
                     else None,
                     "salary_committed": str(r.salary_committed),
                     "fringe_committed": str(r.fringe_committed),
+                    "tuition_committed": str(r.tuition_committed),
+                    "insurance_committed": str(r.insurance_committed),
+                    "service_center_committed": str(r.service_center_committed),
+                    "travel_committed": str(r.travel_committed),
+                    "travel_foreign_committed": str(r.travel_foreign_committed),
+                    "supplies_committed": str(r.supplies_committed),
+                    "equipment_committed": str(r.equipment_committed),
+                    "subcontracts_committed": str(r.subcontracts_committed),
+                    "consultant_committed": str(r.consultant_committed),
+                    "other_committed": str(r.other_committed),
                     "funded_ceiling": str(r.funded_ceiling) if r.funded_ceiling else None,
+                    "total_revenue_received": str(r.total_revenue_received)
+                    if r.total_revenue_received
+                    else None,
+                    "revenue_month": str(r.revenue_month) if r.revenue_month else None,
+                    "budget_start_date": r.budget_start_date.isoformat()
+                    if r.budget_start_date
+                    else None,
+                    "budget_end_date": r.budget_end_date.isoformat() if r.budget_end_date else None,
+                    "grant_end_date": r.grant_end_date.isoformat() if r.grant_end_date else None,
+                    "grantor_code": r.grantor_code,
+                    "stated_idc_rate": str(r.stated_idc_rate) if r.stated_idc_rate else None,
+                    "commitment_details": [
+                        {
+                            "person_name": c.person_name,
+                            "type": c.employee_type.value,
+                            "salary_committed": str(c.salary_committed),
+                            "fringe_committed": str(c.fringe_committed),
+                            "idc_committed": str(c.idc_committed),
+                            "encumbrance_start": c.encumbrance_start.isoformat()
+                            if c.encumbrance_start
+                            else None,
+                            "encumbrance_end": c.encumbrance_end.isoformat()
+                            if c.encumbrance_end
+                            else None,
+                        }
+                        for c in r.commitment_details
+                    ],
                 }
                 for r in reports
             ]
@@ -491,6 +569,14 @@ class ProjectStore:
         if not data:
             return json.dumps({"error": f"Project not found: {project_id}"})
 
+        # One authoritative budget figure, so the project record and the budget
+        # object cannot disagree (the manifest carries a rounded copy).
+        from .budget_resolution import resolve_project_budget
+
+        authoritative_budget, budget_source = resolve_project_budget(
+            self, project_id, self.data_dir
+        )
+
         # Convert to serializable dict
         result: dict[str, Any] = {
             "project": {
@@ -500,6 +586,10 @@ class ProjectStore:
                 "type": data.project.project_type.value,
                 "grant_number": data.project.grant_number,
                 "award_id": data.project.award_id,
+                "total_budget": str(authoritative_budget)
+                if authoritative_budget > Decimal("0")
+                else None,
+                "total_budget_source": budget_source,
             },
             "budget": None,
             "spending": [],
@@ -510,12 +600,51 @@ class ProjectStore:
             result["budget"] = {
                 "total_direct_costs": str(data.budget.total_direct_costs),
                 "total_indirect_costs": str(data.budget.total_indirect_costs),
-                "total_budget": str(data.budget.total_budget),
+                "total_budget": str(
+                    authoritative_budget
+                    if authoritative_budget > Decimal("0")
+                    else data.budget.total_budget
+                ),
                 "lines": [
                     {"category": line.category, "year": line.year, "amount": str(line.amount)}
                     for line in data.budget.lines
                 ],
             }
+        elif authoritative_budget > Decimal("0"):
+            result["budget"] = {
+                "total_direct_costs": None,
+                "total_indirect_costs": None,
+                "total_budget": str(authoritative_budget),
+                "lines": [],
+            }
+        else:
+            # Check contractual budget YAML
+            from .contractual_budget import load_contractual_budget
+
+            b_path = self.data_dir / "projects" / project_id / "budget_config.yaml"
+            if not b_path.exists() and data.project.budget_dir:
+                cand = Path(data.project.budget_dir)
+                b_path = (
+                    cand / "budget_config.yaml"
+                    if cand.is_absolute()
+                    else self.data_dir / cand / "budget_config.yaml"
+                )
+            if b_path.exists():
+                contract = load_contractual_budget(b_path)
+                if contract:
+                    result["budget"] = {
+                        "total_direct_costs": str(contract.total_direct_costs),
+                        "total_indirect_costs": str(contract.total_indirect_costs),
+                        "total_budget": str(contract.total_budget),
+                        "lines": [
+                            {
+                                "category": f"Year {p.year_num}",
+                                "year": p.year_num,
+                                "amount": str(p.total),
+                            }
+                            for p in contract.periods
+                        ],
+                    }
 
         for r in data.spending:
             result["spending"].append(
@@ -524,15 +653,48 @@ class ProjectStore:
                     "total_spent": str(r.total_spent),
                     "total_committed": str(r.total_committed),
                     "total_spent_and_committed": str(r.total_spent_and_committed),
+                    "total_month": str(r.total_month) if r.total_month is not None else None,
                     "salary_spent": str(r.salary_spent),
                     "fringe_spent": str(r.fringe_spent),
                     "tuition_spent": str(r.tuition_spent),
                     "insurance_spent": str(r.insurance_spent),
                     "service_center_spent": str(r.service_center_spent),
                     "travel_spent": str(r.travel_spent),
+                    "travel_foreign_spent": str(r.travel_foreign_spent),
+                    "supplies_spent": str(r.supplies_spent),
+                    "equipment_spent": str(r.equipment_spent),
+                    "subcontracts_spent": str(r.subcontracts_spent),
+                    "consultant_spent": str(r.consultant_spent),
                     "other_spent": str(r.other_spent),
                     "indirect_spent": str(r.indirect_spent),
                     "funded_ceiling": str(r.funded_ceiling) if r.funded_ceiling else None,
+                    "total_revenue_received": str(r.total_revenue_received)
+                    if r.total_revenue_received
+                    else None,
+                    "revenue_month": str(r.revenue_month) if r.revenue_month else None,
+                    "budget_start_date": r.budget_start_date.isoformat()
+                    if r.budget_start_date
+                    else None,
+                    "budget_end_date": r.budget_end_date.isoformat() if r.budget_end_date else None,
+                    "grant_end_date": r.grant_end_date.isoformat() if r.grant_end_date else None,
+                    "grantor_code": r.grantor_code,
+                    "stated_idc_rate": str(r.stated_idc_rate) if r.stated_idc_rate else None,
+                    "commitment_details": [
+                        {
+                            "person_name": c.person_name,
+                            "type": c.employee_type.value,
+                            "salary_committed": str(c.salary_committed),
+                            "fringe_committed": str(c.fringe_committed),
+                            "idc_committed": str(c.idc_committed),
+                            "encumbrance_start": c.encumbrance_start.isoformat()
+                            if c.encumbrance_start
+                            else None,
+                            "encumbrance_end": c.encumbrance_end.isoformat()
+                            if c.encumbrance_end
+                            else None,
+                        }
+                        for c in r.commitment_details
+                    ],
                 }
             )
 
@@ -543,6 +705,12 @@ class ProjectStore:
                     "period": a.period,
                     "salary": str(a.salary_amount),
                     "type": a.employee_type.value,
+                    "gl_account": a.gl_account,
+                    "wage_type": a.wage_type,
+                    "pay_period_start": a.pay_period_start.isoformat()
+                    if a.pay_period_start
+                    else None,
+                    "pay_period_end": a.pay_period_end.isoformat() if a.pay_period_end else None,
                 }
             )
 

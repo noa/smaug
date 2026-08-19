@@ -5,36 +5,11 @@ from pathlib import Path
 
 import yaml
 
+from ..budget_resolution import resolve_budget_config_path as _resolve_budget_config_path
 from ..config import get_rates_path
 from ..contractual_budget import load_contractual_budget
 from ..store import ProjectStore
 from ..yaml_utils import git_commit_change, yaml_transaction
-
-
-def _resolve_budget_config_path(store: ProjectStore, project_id: str, data_dir: str) -> Path | None:
-    """Resolve the path to a project's budget_config.yaml.
-
-    Returns the path (which may or may not exist yet), or None if the
-    project itself is not found.
-    """
-    data = store.get_project(project_id)
-    if not data:
-        return None
-
-    if data.project.budget_dir:
-        b_path = Path(data.project.budget_dir)
-        if b_path.is_absolute():
-            return b_path / "budget_config.yaml"
-        # Check relative to data_dir first
-        if (Path(data_dir) / b_path / "budget_config.yaml").exists():
-            return Path(data_dir) / b_path / "budget_config.yaml"
-        candidate = Path(data_dir) / "projects" / project_id / "budget_config.yaml"
-        if candidate.exists():
-            return candidate
-        return b_path / "budget_config.yaml"
-
-    # Default convention: projects/<PROJECT>/budget_config.yaml under data_dir
-    return Path(data_dir) / "projects" / project_id / "budget_config.yaml"
 
 
 def _load_idc_rate(data_dir: str) -> Decimal:
