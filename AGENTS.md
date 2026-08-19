@@ -189,6 +189,17 @@ smaug setup show               # Show installation and setup status
 - **Effort** is expressed as a decimal (0.25) or percentage (25%) depending on context
 - Use `smaug list` first to see available projects and their short names
 - Use `smaug dump <PROJECT>` for machine-readable JSON output
+- **Never put real budget data outside the data directory.** Everything smaug
+  reads is confidential: colleague names, salaries and pay periods, award and
+  grant numbers, sponsor names, and award dollar figures. Do not copy any of it
+  into commit messages, pull requests, issues, code comments, docstrings, test
+  fixtures, or documentation — this repository is public, and a name next to a
+  salary line is the kind of disclosure that cannot be taken back. Describe the
+  shape of a problem instead ("a category row with no charge this month"), and
+  when an example is genuinely needed, invent one using the fictional names and
+  identifiers already in `examples/` (Smith/Doe/Roe, QUASAR/NEXUS/ATLAS). The
+  `--anonymize` flag protects tool *output*; it does nothing for text you write
+  yourself.
 
 ## Python API
 
