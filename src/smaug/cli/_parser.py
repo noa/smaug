@@ -36,6 +36,7 @@ from ._read_commands import (
     cmd_state_of_play,
     cmd_status,
 )
+from ._reimbursement import cmd_reimbursement
 from ._setup import cmd_setup
 from ._write_commands import (
     cmd_add_person,
@@ -557,6 +558,98 @@ def main():
     invoice_import.add_argument("--force", action="store_true", help="Overwrite existing files")
 
     invoice_parser.set_defaults(func=cmd_invoice)
+
+    # reimbursement command
+    reimb_parser = subparsers.add_parser(
+        "reimbursement", help="Manage out-of-pocket reimbursements and credit card statements"
+    )
+    reimb_subparsers = reimb_parser.add_subparsers(dest="action", required=True)
+
+    # reimbursement list
+    reimb_list = reimb_subparsers.add_parser("list", help="List reimbursement items")
+    reimb_list.add_argument("--project", "-p", help="Filter by project")
+    reimb_list.add_argument(
+        "--status",
+        "-s",
+        help="Filter by status (pending, submitted, reimbursed, rejected, ignored)",
+    )
+    reimb_list.add_argument(
+        "--category", "-c", help="Filter by category (travel, compute, equipment, supplies, other)"
+    )
+
+    # reimbursement import
+    reimb_import = reimb_subparsers.add_parser(
+        "import", help="Import credit card or bank statement CSV"
+    )
+    reimb_import.add_argument("path", help="Path to statement CSV or Concur XLSX export file/dir")
+    reimb_import.add_argument("--project", "-p", help="Default project assignment")
+    reimb_import.add_argument(
+        "--interactive", "-i", action="store_true", help="Interactive terminal triage wizard"
+    )
+    reimb_import.add_argument(
+        "--auto-high",
+        action="store_true",
+        help="Automatically accept high-confidence research expenses",
+    )
+    reimb_import.add_argument("--claimant", help="Person to reimburse")
+    reimb_import.add_argument(
+        "--dry-run", action="store_true", help="Preview detected candidates without writing"
+    )
+    reimb_import.add_argument(
+        "--status",
+        choices=["submitted", "reimbursed", "accepted", "pending"],
+        help="Status for imported items (default: submitted for Concur, pending for cards)",
+    )
+    reimb_import.add_argument(
+        "--submitted",
+        action="store_true",
+        help="Mark imported items as submitted",
+    )
+    reimb_import.add_argument(
+        "--reimbursed",
+        "--accepted",
+        action="store_true",
+        dest="reimbursed",
+        help="Mark imported items as accepted/reimbursed",
+    )
+
+    # reimbursement add
+    reimb_add = reimb_subparsers.add_parser("add", help="Add a new reimbursement item")
+    reimb_add.add_argument("project", help="Project short name")
+    reimb_add.add_argument("amount", type=float, help="Expense amount")
+    reimb_add.add_argument("description", help="Description of expense")
+    reimb_add.add_argument("--date", help="Date incurred (YYYY-MM-DD)")
+    reimb_add.add_argument(
+        "--category",
+        "-c",
+        default="other",
+        help="Category (travel, compute, equipment, supplies, other)",
+    )
+    reimb_add.add_argument("--claimant", help="Claimant name")
+    reimb_add.add_argument("--notes", help="Notes or justification")
+    reimb_add.add_argument("--external-ref", help="Concur report ID or SAP document #")
+
+    # reimbursement set-status
+    reimb_status = reimb_subparsers.add_parser("set-status", help="Update reimbursement status")
+    reimb_status.add_argument("id", help="Reimbursement ID")
+    reimb_status.add_argument(
+        "status", help="Status (pending, submitted, reimbursed, rejected, ignored)"
+    )
+    reimb_status.add_argument("--external-ref", help="Concur report ID or SAP document #")
+
+    # reimbursement reconcile
+    reimb_reconcile = reimb_subparsers.add_parser(
+        "reconcile", help="Reconcile reimbursements against PI spending reports"
+    )
+    reimb_reconcile.add_argument("--project", "-p", help="Filter by project")
+    reimb_reconcile.add_argument(
+        "--auto-accept",
+        "-y",
+        action="store_true",
+        help="Automatically mark matched items as REIMBURSED",
+    )
+
+    reimb_parser.set_defaults(func=cmd_reimbursement)
 
     # note command
     note_parser = subparsers.add_parser("note", help="Manage per-project notes")

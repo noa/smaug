@@ -17,6 +17,7 @@ MANIFEST_FILE = "manifest.yaml"
 PERSONNEL_CONFIG_FILE = "personnel_config.yaml"
 TRAVEL_CONFIG_FILE = "travel_config.yaml"
 PURCHASES_CONFIG_FILE = "purchases_config.yaml"
+REIMBURSEMENTS_CONFIG_FILE = "reimbursements_config.yaml"
 ALIASES_FILE = "aliases.yaml"
 
 ENV_VAR = "SMAUG_DATA_DIR"

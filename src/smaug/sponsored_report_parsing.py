@@ -23,6 +23,7 @@ from .models import (
     CommitmentDetail,
     EffortAllocation,
     EmployeeType,
+    Expense,
     SpendingReport,
 )
 
@@ -903,7 +904,7 @@ def parse_non_sponsored_summary(page) -> dict:
     """
     Parse the first page of a non-sponsored (discretionary) report.
     """
-    text = page.extract_text()
+    text = page.extract_text() or ""
     result = {}
 
     # Extract funded program
@@ -925,10 +926,58 @@ def parse_non_sponsored_summary(page) -> dict:
                 result["month"] = 1
             break
 
-    # Extract YTD expenditures
-    ytd_match = re.search(r"YTD Expenditures:\s+([\d,.-]+)", text)
-    if ytd_match:
-        result["total_spent"] = clean_text_to_decimal(ytd_match.group(1))
+    # Extract YTD expenditures & monthly from table
+    ytd_line = re.search(r"Year-to-Date Expenditures\s+([\d,.-]+)\s+([\d,.-]+)\s+([\d,.-]+)", text)
+    if ytd_line:
+        result["total_month"] = clean_text_to_decimal(ytd_line.group(2))
+        result["total_spent"] = clean_text_to_decimal(ytd_line.group(3))
+    else:
+        ytd_match = re.search(r"YTD Expenditures:\s+([\d,.-]+)", text)
+        if ytd_match:
+            result["total_spent"] = clean_text_to_decimal(ytd_match.group(1))
+
+    # Parse Category lines from Expenditures table
+    for line in lines:
+        line_clean = line.strip()
+        if line_clean.startswith("Other Expenses"):
+            nums = [clean_text_to_decimal(w) for w in re.findall(r"[\d,]+\.\d{2}", line_clean)]
+            if len(nums) >= 2:
+                if nums[0] == nums[1]:
+                    result["other_spent"] = nums[0]
+                else:
+                    result["other_month"] = nums[0]
+                    result["other_spent"] = nums[1]
+            elif len(nums) == 1:
+                result["other_spent"] = nums[0]
+        elif line_clean.startswith("Travel Foreign"):
+            nums = [clean_text_to_decimal(w) for w in re.findall(r"[\d,]+\.\d{2}", line_clean)]
+            if len(nums) >= 2:
+                if nums[0] == nums[1]:
+                    result["travel_foreign_spent"] = nums[0]
+                else:
+                    result["travel_foreign_month"] = nums[0]
+                    result["travel_foreign_spent"] = nums[1]
+            elif len(nums) == 1:
+                result["travel_foreign_spent"] = nums[0]
+        elif line_clean.startswith("Travel Domestic") or (
+            line_clean.startswith("Travel") and "Foreign" not in line_clean
+        ):
+            nums = [clean_text_to_decimal(w) for w in re.findall(r"[\d,]+\.\d{2}", line_clean)]
+            if len(nums) >= 2:
+                if nums[0] == nums[1]:
+                    result["travel_spent"] = nums[0]
+                else:
+                    result["travel_month"] = nums[0]
+                    result["travel_spent"] = nums[1]
+            elif len(nums) == 1:
+                result["travel_spent"] = nums[0]
+        elif line_clean.startswith("Supplies"):
+            nums = [clean_text_to_decimal(w) for w in re.findall(r"[\d,]+\.\d{2}", line_clean)]
+            if len(nums) >= 2:
+                result["supplies_month"] = nums[0]
+                result["supplies_spent"] = nums[1]
+            elif len(nums) == 1:
+                result["supplies_spent"] = nums[0]
 
     # Extract month-end balance
     bal_match = re.search(r"Month-End Balance:\s+\(?([\d,.-]+)\)?", text)
@@ -936,6 +985,69 @@ def parse_non_sponsored_summary(page) -> dict:
         result["balance"] = clean_text_to_decimal(bal_match.group(1))
 
     return result
+
+
+def parse_non_sponsored_transactions(page) -> list[Expense]:
+    """Parse Page 2 of a non-sponsored report for individual transaction rows."""
+    text = page.extract_text() or ""
+    if "Non Sponsored PI Transaction Report" not in text:
+        return []
+
+    transactions: list[Expense] = []
+    known_categories = [
+        "Other Expenses",
+        "Travel Foreign",
+        "Travel Domestic",
+        "Supplies & Materials",
+        "Capital Equipment",
+        "Service Center",
+        "Consultant Services",
+    ]
+
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line or line.startswith("Total") or "No Transactions" in line:
+            continue
+
+        m = re.search(r"^(.*?)(?:\s+(\d{8,12}))?\s+(\d{2}/\d{2}/\d{4})\s+([\d,]+\.\d{2})$", line)
+        if not m:
+            continue
+
+        pre, ref_doc, date_str, amount_str = m.groups()
+        try:
+            tx_date = datetime.strptime(date_str, "%m/%d/%Y").date()
+            tx_amount = Decimal(amount_str.replace(",", ""))
+        except (ValueError, InvalidOperation):
+            continue
+
+        category = "Other Expenses"
+        remainder = pre
+        for cat in known_categories:
+            if pre.startswith(cat):
+                category = cat
+                remainder = pre[len(cat) :].strip()
+                break
+
+        vendor_match = re.search(r"\s((?:[A-Z][A-Z\.]*(?:\s+|$)){1,3})$", remainder)
+        if vendor_match:
+            vendor = vendor_match.group(1).strip()
+            desc = remainder[: vendor_match.start()].strip()
+        else:
+            vendor = None
+            desc = remainder.strip()
+
+        transactions.append(
+            Expense(
+                date=tx_date,
+                category=category,
+                amount=tx_amount,
+                vendor=vendor,
+                description=desc if desc else None,
+                ref_doc=ref_doc,
+            )
+        )
+
+    return transactions
 
 
 def parse_non_sponsored_report(file_path: str | Path) -> SpendingReport | None:
@@ -952,16 +1064,34 @@ def parse_non_sponsored_report(file_path: str | Path) -> SpendingReport | None:
 
     try:
         with pdfplumber.open(file_path) as pdf:
-            if pdf.pages:
-                summary = parse_non_sponsored_summary(pdf.pages[0])
+            if not pdf.pages:
+                return None
 
-                return SpendingReport(
-                    project_id=summary.get("funded_program", "unknown"),
-                    period=summary.get("period", "Unknown"),
-                    year=summary.get("year", 0),
-                    month=summary.get("month", 0),
-                    total_spent=summary.get("total_spent", Decimal("0")) or Decimal("0"),
-                )
+            summary = parse_non_sponsored_summary(pdf.pages[0])
+
+            transactions: list[Expense] = []
+            for page in pdf.pages[1:]:
+                page_txs = parse_non_sponsored_transactions(page)
+                transactions.extend(page_txs)
+
+            return SpendingReport(
+                project_id=summary.get("funded_program", "unknown"),
+                period=summary.get("period", "Unknown"),
+                year=summary.get("year", 0),
+                month=summary.get("month", 0),
+                total_spent=summary.get("total_spent", Decimal("0")) or Decimal("0"),
+                total_month=summary.get("total_month"),
+                other_spent=summary.get("other_spent", Decimal("0")) or Decimal("0"),
+                other_month=summary.get("other_month"),
+                travel_foreign_spent=summary.get("travel_foreign_spent", Decimal("0"))
+                or Decimal("0"),
+                travel_foreign_month=summary.get("travel_foreign_month"),
+                travel_spent=summary.get("travel_spent", Decimal("0")) or Decimal("0"),
+                travel_month=summary.get("travel_month"),
+                supplies_spent=summary.get("supplies_spent", Decimal("0")) or Decimal("0"),
+                supplies_month=summary.get("supplies_month"),
+                expenses=transactions,
+            )
     except Exception as e:
         print(f"Warning: Error parsing {file_path}: {e}")
 

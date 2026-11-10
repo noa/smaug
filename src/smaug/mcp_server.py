@@ -1119,6 +1119,162 @@ def main():
         api = SmaugAPI(data_dir, anonymize=anonymize)
         return json.dumps(api.remove_project_note(project, identifier), indent=2)
 
+    # -----------------------------------------------------------------------
+    # Reimbursements
+    # -----------------------------------------------------------------------
+
+    @mcp.tool()
+    def list_reimbursements(
+        project: str | None = None,
+        status: str | None = None,
+        category: str | None = None,
+    ) -> str:
+        """List tracked out-of-pocket reimbursements filtered by project, status, or category.
+
+        Args:
+            project: Optional project short name.
+            status: Optional status ('pending', 'submitted', 'reimbursed', 'rejected', 'ignored').
+            category: Optional category ('travel', 'compute', 'equipment', 'supplies', 'other').
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.list_reimbursements(project=project, status=status, category=category),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def import_credit_card(
+        file_path: str,
+        default_project: str | None = None,
+        auto_accept_high: bool = False,
+        claimant: str | None = None,
+    ) -> str:
+        """Import and classify transactions from a credit card or bank statement CSV.
+
+        Args:
+            file_path: Path to the statement CSV (e.g., Chase activity export).
+            default_project: Optional default project to assign.
+            auto_accept_high: Automatically accept high-confidence research expenses.
+            claimant: Optional claimant name for the reimbursements.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.import_credit_card(
+                file_path=file_path,
+                default_project=default_project,
+                auto_accept_high=auto_accept_high,
+                claimant=claimant,
+            ),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def import_concur_report(
+        file_path: str,
+        project: str,
+        status: str = "submitted",
+        claimant: str | None = None,
+        dry_run: bool = False,
+    ) -> str:
+        """Import expense entries from a Concur expense report spreadsheet (.xlsx).
+
+        Args:
+            file_path: Path to the Concur .xlsx export.
+            project: Explicit project to assign (e.g., 'QUASAR', 'DISCRETIONARY').
+            status: Status to assign ('submitted' or 'reimbursed'/'accepted').
+            claimant: Optional claimant name for the reimbursements.
+            dry_run: If True, preview entries without writing to config.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.import_concur_reimbursements(
+                file_path=file_path,
+                project=project,
+                status=status,
+                claimant=claimant,
+                dry_run=dry_run,
+            ),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def add_reimbursement(
+        project: str,
+        amount: float,
+        description: str,
+        date_incurred: str,
+        category: str = "other",
+        claimant: str | None = None,
+        notes: str | None = None,
+        external_ref: str | None = None,
+    ) -> str:
+        """Add a new reimbursable expense item.
+
+        Args:
+            project: Project short name.
+            amount: Dollar amount.
+            description: Description of expense.
+            date_incurred: Date expense was incurred (YYYY-MM-DD).
+            category: Expense category ('travel', 'compute', 'equipment', 'supplies', 'other').
+            claimant: Optional claimant name.
+            notes: Optional justification or notes.
+            external_ref: Optional Concur or SAP reference number.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.add_reimbursement(
+                project=project,
+                amount=amount,
+                description=description,
+                date_incurred=date_incurred,
+                category=category,
+                claimant=claimant,
+                notes=notes,
+                external_ref=external_ref,
+            ),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def set_reimbursement_status(
+        reimbursement_id: str,
+        status: str,
+        external_ref: str | None = None,
+    ) -> str:
+        """Update lifecycle status of a reimbursement.
+
+        Args:
+            reimbursement_id: Unique reimbursement ID.
+            status: New status ('pending', 'submitted', 'reimbursed', 'rejected', 'ignored').
+            external_ref: Optional Concur or SAP reference number.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.set_reimbursement_status(
+                reimbursement_id=reimbursement_id,
+                status=status,
+                external_ref=external_ref,
+            ),
+            indent=2,
+        )
+
+    @mcp.tool()
+    def reconcile_reimbursements(
+        project: str | None = None,
+        auto_accept: bool = False,
+    ) -> str:
+        """Reconcile outstanding reimbursements against institutional PI spending reports.
+
+        Args:
+            project: Optional project short name.
+            auto_accept: If True, automatically mark confirmed report matches as REIMBURSED.
+        """
+        api = SmaugAPI(data_dir, anonymize=anonymize)
+        return json.dumps(
+            api.reconcile_reimbursements(project=project, auto_accept=auto_accept),
+            indent=2,
+        )
+
     mcp.run()
 
 

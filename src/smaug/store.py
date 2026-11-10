@@ -24,6 +24,9 @@ from .models import (
     ProjectData,
     ProjectStatus,
     ProjectType,
+    ReimbursementCategory,
+    ReimbursementItem,
+    ReimbursementStatus,
     SpendingReport,
     TravelItem,
     TravelStatus,
@@ -63,6 +66,7 @@ class ProjectStore:
         self._spending: dict[str, list[SpendingReport]] = {}
         self._travel: list[TravelItem] = []
         self._expenses: list[ExpenseItem] = []
+        self._reimbursements: list[ReimbursementItem] = []
         self._invoices: dict[str, list[Invoice]] = {}
         self._personnel = PersonnelTracker()
         self._parse_warnings: list[ParseWarning] = []
@@ -293,6 +297,62 @@ class ProjectStore:
             except Exception as e:
                 print(f"Warning: Failed to parse expense item: {item}. Error: {e}")
 
+    def load_reimbursements_config(self) -> None:
+        """Load reimbursement configuration from reimbursements_config.yaml."""
+        self._reimbursements = []
+        config_path = self.projects_dir / "reimbursements_config.yaml"
+        if not config_path.exists():
+            return
+
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+
+        if not config or not isinstance(config, dict):
+            return
+
+        for item in config.get("reimbursements", []):
+            try:
+                date_str = item.get("date")
+                item_date = None
+                if date_str:
+                    parts = str(date_str).split("-")
+                    if len(parts) >= 3:
+                        item_date = date(int(parts[0]), int(parts[1]), int(parts[2]))
+                    elif len(parts) == 2:
+                        item_date = date(int(parts[0]), int(parts[1]), 1)
+
+                cat_str = item.get("category", "other")
+                try:
+                    cat_enum = ReimbursementCategory(cat_str)
+                except ValueError:
+                    cat_enum = ReimbursementCategory.OTHER
+
+                stat_str = item.get("status", "pending")
+                try:
+                    stat_enum = ReimbursementStatus(stat_str)
+                except ValueError:
+                    stat_enum = ReimbursementStatus.PENDING
+
+                self._reimbursements.append(
+                    ReimbursementItem(
+                        id=str(item.get("id", "")),
+                        project_id=str(item.get("project", "")),
+                        date=item_date or date.today(),
+                        amount=Decimal(str(item.get("amount", 0))),
+                        description=str(item.get("description", "")),
+                        category=cat_enum,
+                        claimant=item.get("claimant"),
+                        status=stat_enum,
+                        external_ref=item.get("external_ref"),
+                        reconciled_report=item.get("reconciled_report"),
+                        source=item.get("source"),
+                        notes=item.get("notes"),
+                        hash_id=item.get("hash_id"),
+                    )
+                )
+            except Exception as e:
+                print(f"Warning: Failed to parse reimbursement item: {item}. Error: {e}")
+
     def _find_project_by_short_name(self, name: str) -> str | None:
         """Find project by short name (direct match)."""
         if name in self._projects:
@@ -374,6 +434,7 @@ class ProjectStore:
         self.load_manifest()
         self.load_travel_config()
         self.load_purchases_config()
+        self.load_reimbursements_config()
         self.load_budgets()
         self.load_reports()
         self.load_invoices()
@@ -388,6 +449,17 @@ class ProjectStore:
     def get_project_expenses(self, project_id: str) -> list[ExpenseItem]:
         """Get expense items for a specific project."""
         return [e for e in self._expenses if e.project_id == project_id]
+
+    def get_project_reimbursements(self, project_id: str) -> list[ReimbursementItem]:
+        """Get reimbursement items for a specific project."""
+        return sorted(
+            [r for r in self._reimbursements if r.project_id.upper() == project_id.upper()],
+            key=lambda r: r.date if r.date else date.max,
+        )
+
+    def get_all_reimbursements(self) -> list[ReimbursementItem]:
+        """Get all reimbursement items."""
+        return sorted(self._reimbursements, key=lambda r: r.date if r.date else date.max)
 
     def get_project_invoices(self, project_id: str) -> list[Invoice]:
         """Get invoices for a specific project, sorted by period."""

@@ -2933,3 +2933,169 @@ class SmaugAPI:
                 return self._sanitize_result({"success": True, "healthcare_annual": amount})
             except Exception as e:
                 return self._sanitize_result({"error": str(e)})
+
+    def import_credit_card(
+        self,
+        file_path: str,
+        default_project: str | None = None,
+        auto_accept_high: bool = False,
+        claimant: str | None = None,
+    ) -> dict:
+        """Import credit card / bank statement CSV."""
+        from .reimbursements import import_credit_card_statement
+
+        with self._suppress_stdout():
+            try:
+                res = import_credit_card_statement(
+                    self._get_store(),
+                    file_path,
+                    default_project=default_project,
+                    auto_accept_high=auto_accept_high,
+                    claimant=claimant,
+                )
+                self._store = None
+                return self._sanitize_result(res)
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def import_concur_reimbursements(
+        self,
+        file_path: str,
+        project: str,
+        status: str = "submitted",
+        claimant: str | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Import expense entries from a Concur expense report spreadsheet (.xlsx)."""
+        from .reimbursements import import_concur_report
+
+        if not project or not str(project).strip():
+            return self._sanitize_result(
+                {"error": "An explicit project must be specified for Concur expense import."}
+            )
+
+        with self._suppress_stdout():
+            try:
+                res = import_concur_report(
+                    self._get_store(),
+                    file_path,
+                    project=project.strip().upper(),
+                    status=status,
+                    claimant=claimant,
+                    dry_run=dry_run,
+                )
+                self._store = None
+                return self._sanitize_result(res)
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def list_reimbursements(
+        self,
+        project: str | None = None,
+        status: str | None = None,
+        category: str | None = None,
+    ) -> list[dict]:
+        """List tracked reimbursements filtered by project, status, and/or category."""
+        from .reimbursements import filter_reimbursements
+
+        with self._suppress_stdout():
+            items = filter_reimbursements(
+                self._get_store(), project=project, status=status, category=category
+            )
+            return [self._sanitize_result(i.to_dict()) for i in items]
+
+    def add_reimbursement(
+        self,
+        project: str,
+        amount: float,
+        description: str,
+        date_incurred: str,
+        category: str = "other",
+        claimant: str | None = None,
+        notes: str | None = None,
+        external_ref: str | None = None,
+    ) -> dict:
+        """Add a new reimbursable expense item."""
+        from .reimbursements import add_reimbursement
+
+        with self._suppress_stdout():
+            try:
+                item = add_reimbursement(
+                    self._get_store(),
+                    project=project,
+                    amount=amount,
+                    description=description,
+                    date_incurred=date_incurred,
+                    category=category,
+                    claimant=claimant,
+                    notes=notes,
+                    external_ref=external_ref,
+                )
+                self._store = None
+                return self._sanitize_result(item.to_dict())
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def set_reimbursement_status(
+        self,
+        reimbursement_id: str,
+        status: str,
+        external_ref: str | None = None,
+    ) -> dict:
+        """Update the lifecycle status of a reimbursement."""
+        from .reimbursements import update_reimbursement
+
+        with self._suppress_stdout():
+            try:
+                res = update_reimbursement(
+                    self._get_store(),
+                    reimbursement_id,
+                    status=status,
+                    external_ref=external_ref,
+                )
+                self._store = None
+                if res:
+                    return self._sanitize_result({"success": True, "reimbursement": res.to_dict()})
+                return self._sanitize_result(
+                    {"error": f"Reimbursement '{reimbursement_id}' not found"}
+                )
+            except Exception as e:
+                return self._sanitize_result({"error": str(e)})
+
+    def reconcile_reimbursements(
+        self,
+        project: str | None = None,
+        auto_accept: bool = False,
+    ) -> list[dict]:
+        """Reconcile outstanding reimbursements against institutional PI spending reports."""
+        from .reimbursements import auto_reconcile, reconcile_reimbursements
+
+        with self._suppress_stdout():
+            try:
+                if auto_accept:
+                    matches = auto_reconcile(self._get_store(), project=project)
+                else:
+                    matches = reconcile_reimbursements(self._get_store(), project=project)
+                self._store = None
+                results = []
+                for m in matches:
+                    results.append(
+                        self._sanitize_result(
+                            {
+                                "reimbursement_id": m.reimbursement_id,
+                                "project_id": m.project_id,
+                                "amount": float(m.reimbursement_amount),
+                                "date": m.reimbursement_date.isoformat()
+                                if m.reimbursement_date
+                                else None,
+                                "match_type": m.match_type,
+                                "report_period": m.report_period,
+                                "confidence": m.confidence,
+                                "details": m.details,
+                                "matched_ref_doc": m.matched_ref_doc,
+                            }
+                        )
+                    )
+                return results
+            except Exception as e:
+                return [self._sanitize_result({"error": str(e)})]
