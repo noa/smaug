@@ -120,6 +120,12 @@ smaug history
 # Suggest budget mitigation strategies to extend stop-work date
 smaug optimize QUASAR
 smaug optimize QUASAR --target-months 18
+
+# Out-of-pocket reimbursement tracking & reconciliation
+smaug reimbursement list
+smaug reimbursement list --project QUASAR --status reimbursed
+smaug reimbursement reconcile
+smaug reimbursement reconcile --auto-accept
 ```
 
 ### Write commands (modify configuration)
@@ -172,6 +178,15 @@ smaug export QUASAR spend_plan.xlsx
 # Scan & import lockbox invoices
 smaug invoice import /path/to/invoice.pdf
 smaug invoice import /path/to/invoices/ --project QUASAR --force
+
+# Out-of-pocket reimbursements & statements
+smaug reimbursement import /path/to/statement.csv --interactive      # Interactive triage of credit card transactions
+smaug reimbursement import /path/to/statement.csv --auto-high        # Auto-import high confidence research items
+smaug reimbursement import /path/to/report.xlsx --submitted          # Import Concur export as submitted
+smaug reimbursement import /path/to/report.xlsx --reimbursed          # Import Concur export as accepted/reimbursed
+smaug reimbursement import /path/to/concur_dir/ --reimbursed         # Batch import Concur spreadsheets
+smaug reimbursement add QUASAR 350.00 "Lab supplies" --date 2026-07-01
+smaug reimbursement set-status reimb-20260701-abc123 submitted --external-ref CONCUR-1002
 
 # Setup and environment configuration
 smaug setup mcp                # Register MCP server with Claude Code (project scope)
@@ -228,6 +243,7 @@ Smaug ships a full-featured MCP server exposing both read and write tools for AI
 - **Project & Budget Lifecycle**: `add_project`, `set_project_status`, `set_project_budget`, `set_project_end`, `add_budget_period`, `set_budget_period`
 - **Rates Configuration**: `set_fringe`, `set_idc`, `set_tuition`, `set_healthcare`
 - **Items & Notes**: `add_travel_item`, `add_expense_item`, `edit_expense_item`, `remove_expense_item`, `list_project_notes`, `show_project_note`, `add_project_note`, `remove_project_note`
+- **Reimbursements & Statements**: `list_reimbursements`, `add_reimbursement`, `set_reimbursement_status`, `reconcile_reimbursements`, `import_credit_card`, `import_concur_report`
 - **Importing**: `import_report`, `import_invoice`
 
 The easiest way to register it with Claude Code:

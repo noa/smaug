@@ -35,6 +35,26 @@ class TravelStatus(Enum):
     ACTUALIZED = "actualized"
 
 
+class ReimbursementStatus(Enum):
+    """Lifecycle status for an out-of-pocket expense reimbursement."""
+
+    PENDING = "pending"  # Identified/flagged, not yet submitted to institutional system
+    SUBMITTED = "submitted"  # Submitted into Concur/SAP
+    REIMBURSED = "reimbursed"  # Confirmed paid / reconciled against reports
+    REJECTED = "rejected"  # Denied
+    IGNORED = "ignored"  # Personal or non-reimbursable
+
+
+class ReimbursementCategory(Enum):
+    """Category of reimbursable expense."""
+
+    TRAVEL = "travel"
+    COMPUTE = "compute"
+    EQUIPMENT = "equipment"
+    SUPPLIES = "supplies"
+    OTHER = "other"
+
+
 class ProjectType(Enum):
     """Distinguishes sponsored research from discretionary accounts."""
 
@@ -301,6 +321,93 @@ class ExpenseItem:
         if self.end_date:
             data["end"] = self.end_date.isoformat()
         return data
+
+
+@dataclass
+class CreditCardTransaction:
+    """A transaction from a credit card statement."""
+
+    transaction_date: Date
+    post_date: Date | None
+    description: str
+    category: str
+    amount: Decimal
+    card_source: str = "Unknown"
+    transaction_type: str = "Sale"
+    memo: str | None = None
+    hash_id: str = ""
+
+    def to_dict(self):
+        return {
+            "transaction_date": self.transaction_date.isoformat()
+            if self.transaction_date
+            else None,
+            "post_date": self.post_date.isoformat() if self.post_date else None,
+            "description": self.description,
+            "category": self.category,
+            "amount": float(self.amount),
+            "card_source": self.card_source,
+            "type": self.transaction_type,
+            "memo": self.memo,
+            "hash_id": self.hash_id,
+        }
+
+
+@dataclass
+class ReimbursementItem:
+    """A tracked reimbursable expense."""
+
+    id: str
+    project_id: str
+    date: Date
+    amount: Decimal
+    description: str
+    category: ReimbursementCategory = ReimbursementCategory.OTHER
+    claimant: str | None = None
+    status: ReimbursementStatus = ReimbursementStatus.PENDING
+    external_ref: str | None = None  # e.g., Concur Report # or SAP Doc #
+    reconciled_report: str | None = None  # e.g. "June 2026 (Ref Doc 1900000001)"
+    source: str | None = None  # e.g. "Chase 1234"
+    notes: str | None = None
+    hash_id: str | None = None  # deduplication hash from source statement
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "project": self.project_id,
+            "date": self.date.isoformat() if self.date else None,
+            "amount": float(self.amount),
+            "description": self.description,
+            "category": self.category.value
+            if isinstance(self.category, ReimbursementCategory)
+            else str(self.category),
+            "claimant": self.claimant,
+            "status": self.status.value
+            if isinstance(self.status, ReimbursementStatus)
+            else str(self.status),
+            "external_ref": self.external_ref,
+            "reconciled_report": self.reconciled_report,
+            "source": self.source,
+            "notes": self.notes,
+            "hash_id": self.hash_id,
+        }
+
+
+@dataclass
+class ReconciliationMatch:
+    """A match between a reimbursement item and an institutional spending report / transaction."""
+
+    reimbursement_id: str
+    project_id: str
+    reimbursement_amount: Decimal
+    reimbursement_date: Date
+    match_type: str  # "exact_transaction", "category_spike", "unmatched"
+    report_period: str
+    confidence: str  # "exact", "high", "medium", "unmatched"
+    details: str
+    matched_ref_doc: str | None = None
+    matched_date: Date | None = None
+    matched_amount: Decimal | None = None
 
 
 @dataclass
